@@ -45,6 +45,15 @@ function App() {
   const [sectionTimerActive, setSectionTimerActive] = useState(false);
   const [totalTimeSpent, setTotalTimeSpent] = useState(0);
 
+  // Function to update time spent on server
+  const updateTimeSpent = async (newTime) => {
+    try {
+      await api.post('/stats/time', { totalTimeSpent: newTime });
+    } catch (error) {
+      console.error('Failed to update time spent:', error);
+    }
+  };
+
   // Timer effect
   useEffect(() => {
     let interval;
@@ -94,11 +103,14 @@ function App() {
   const fetchStats = async () => {
     try {
       const response = await api.get('/stats');
-      // Pull weeklyCounts out if available
-      const { weeklyCounts, ...rest } = response.data;
+      // Pull weeklyCounts and totalTimeSpent out
+      const { weeklyCounts, totalTimeSpent: serverTime, ...rest } = response.data;
       setStats(rest);
       if (weeklyCounts) {
         setWeeklyCounts(weeklyCounts);
+      }
+      if (typeof serverTime === 'number') {
+        setTotalTimeSpent(serverTime);
       }
     } catch (error) {
       console.error('Failed to fetch stats:', error);
@@ -147,6 +159,8 @@ function App() {
   setLocalSolved(new Set());
   setLevelProgress([]);
   setWeeklyCounts([0,0,0,0,0,0,0]);
+  setTotalTimeSpent(0);
+  setSectionTimer(0);
   };
 
   const fetchPuzzles = async (category, level) => {
@@ -245,9 +259,11 @@ function App() {
         launchFireworks(3000);
 
         // Refresh progress after the fireworks have started, then navigate back
-        setTimeout(() => {
+        setTimeout(async () => {
           // Save section time and cleanup
-          setTotalTimeSpent(prev => prev + sectionTimer);
+          const newTotalTime = totalTimeSpent + sectionTimer;
+          setTotalTimeSpent(newTotalTime);
+          await updateTimeSpent(newTotalTime);
           setSectionTimerActive(false);
           fetchLevelProgress(); // Refresh progress before going back
           setView('categories');
@@ -937,9 +953,11 @@ function App() {
             </div>
             <button 
               style={styles.secondaryButton}
-              onClick={() => { 
+              onClick={async () => { 
                 // Save section time and cleanup
-                setTotalTimeSpent(prev => prev + sectionTimer);
+                const newTotalTime = totalTimeSpent + sectionTimer;
+                setTotalTimeSpent(newTotalTime);
+                await updateTimeSpent(newTotalTime);
                 setSectionTimerActive(false);
                 fetchLevelProgress(); 
                 setView('categories'); 

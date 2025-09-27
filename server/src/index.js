@@ -81,6 +81,8 @@ const streakSchema = new mongoose.Schema({
   solvedPuzzles: [{ type: String }], // Track which puzzles were solved to avoid duplicates
   // Keep a small history of solves with timestamps so we can build weekly charts
   solvedHistory: [{ puzzleId: String, solvedAt: Date }],
+  // Track total time spent on puzzles
+  totalTimeSpent: { type: Number, default: 0 },
   updatedAt: { type: Date, default: Date.now }
 });
 
@@ -1417,6 +1419,47 @@ app.post('/api/puzzles/:id/skip', authenticateToken, async (req, res) => {
 });
 
 // Get user stats (protected)
+// Update time spent (protected)
+app.post('/api/stats/time', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { totalTimeSpent } = req.body;
+
+    if (typeof totalTimeSpent !== 'number') {
+      return res.status(400).json({ error: 'Invalid time value' });
+    }
+
+    if (mongoose.connection.readyState === 1) {
+      const mongoUserId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+      await Streak.findOneAndUpdate(
+        { userId: mongoUserId },
+        { $set: { totalTimeSpent } },
+        { upsert: true }
+      );
+    } else {
+      const streak = memoryStreaks.find(s => String(s.userId) === String(userId));
+      if (streak) {
+        streak.totalTimeSpent = totalTimeSpent;
+      } else {
+        memoryStreaks.push({
+          userId: String(userId),
+          totalTimeSpent,
+          currentStreak: 0,
+          longestStreak: 0,
+          totalPuzzlesSolved: 0,
+          solvedPuzzles: [],
+          solvedHistory: []
+        });
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Time update error:', error);
+    res.status(500).json({ error: 'Failed to update time' });
+  }
+});
+
 app.get('/api/stats', authenticateToken, async (req, res) => {
   try {
     const userId = req.userId;
@@ -1473,6 +1516,7 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
         totalPuzzlesSolved: streak.totalPuzzlesSolved,
         lastActivityDate: streak.lastActivityDate,
         uniquePuzzlesSolved: streak.solvedPuzzles?.length || 0,
+        totalTimeSpent: streak.totalTimeSpent || 0,
         weeklyCounts
       });
     }
