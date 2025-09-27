@@ -49,6 +49,25 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
+const levelProgressSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  category: { type: String, required: true },
+  level: { type: Number, required: true },
+  completed: { type: Boolean, default: false },
+  puzzlesSolved: { type: Number, default: 0 },
+  totalPuzzles: { type: Number, default: 5 }, // 5 puzzles per level
+  completedAt: { type: Date },
+  createdAt: { type: Date, default: Date.now }
+});
+
+// Create compound index for efficient queries
+levelProgressSchema.index({ userId: 1, category: 1, level: 1 }, { unique: true });
+
+const LevelProgress = mongoose.model('LevelProgress', levelProgressSchema);
+
+// ADD in-memory storage for level progress (add after other memory arrays):
+let memoryLevelProgress = [];
+
 const User = mongoose.model('User', userSchema);
 
 // Streak Schema
@@ -97,7 +116,7 @@ const authenticateToken = async (req, res, next) => {
 };
 
 // Helper function to update streak (only for NEW puzzles)
-const updateStreak = async (userId, puzzleId) => {
+const updateStreak = async (userId) => {
   try {
     const today = new Date().toDateString();
     
@@ -106,16 +125,8 @@ const updateStreak = async (userId, puzzleId) => {
       let streak = await Streak.findOne({ userId });
       
       if (!streak) {
-        streak = new Streak({ userId, solvedPuzzles: [] });
+        streak = new Streak({ userId, totalPuzzlesSolved: 0 }); // Ensure it starts at 0
       }
-
-      // Check if puzzle was already solved
-      if (streak.solvedPuzzles.includes(puzzleId)) {
-        return false; // Don't update streak for repeated puzzles
-      }
-
-      // Add puzzle to solved list
-      streak.solvedPuzzles.push(puzzleId);
 
       const lastActivity = streak.lastActivityDate?.toDateString();
       
@@ -126,10 +137,10 @@ const updateStreak = async (userId, puzzleId) => {
           // Yesterday - continue streak
           streak.currentStreak++;
         } else if (lastActivity) {
-          // Gap in activity - reset streak
+          // Gap in activity - reset streak to 1
           streak.currentStreak = 1;
         } else {
-          // First activity
+          // First activity ever
           streak.currentStreak = 1;
         }
         
@@ -137,10 +148,13 @@ const updateStreak = async (userId, puzzleId) => {
         streak.lastActivityDate = new Date();
       }
       
-      streak.totalPuzzlesSolved++;
+      // ALWAYS increment total puzzles solved
+      streak.totalPuzzlesSolved = (streak.totalPuzzlesSolved || 0) + 1;
       streak.updatedAt = new Date();
+      
       await streak.save();
-      return true;
+      console.log(`✅ Stats updated for user ${userId}: ${streak.totalPuzzlesSolved} total, ${streak.currentStreak} streak`);
+      
     } else {
       // Use memory storage
       let streak = memoryStreaks.find(s => s.userId === userId);
@@ -150,19 +164,10 @@ const updateStreak = async (userId, puzzleId) => {
           currentStreak: 0,
           longestStreak: 0,
           lastActivityDate: null,
-          totalPuzzlesSolved: 0,
-          solvedPuzzles: []
+          totalPuzzlesSolved: 0
         };
         memoryStreaks.push(streak);
       }
-      
-      // Check if puzzle was already solved
-      if (streak.solvedPuzzles.includes(puzzleId)) {
-        return false; // Don't update streak for repeated puzzles
-      }
-
-      // Add puzzle to solved list
-      streak.solvedPuzzles.push(puzzleId);
       
       const today = new Date().toDateString();
       const lastActivity = streak.lastActivityDate?.toDateString();
@@ -182,12 +187,72 @@ const updateStreak = async (userId, puzzleId) => {
         streak.lastActivityDate = new Date();
       }
       
+      // ALWAYS increment total puzzles solved
       streak.totalPuzzlesSolved++;
-      return true;
+      console.log(`✅ Memory stats updated for user ${userId}: ${streak.totalPuzzlesSolved} total, ${streak.currentStreak} streak`);
     }
   } catch (error) {
     console.error('Streak update error:', error);
-    return false;
+  }
+};
+
+const updateLevelProgress = async (userId, category, level) => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      // MongoDB is available
+      let progress = await LevelProgress.findOne({ userId, category, level });
+      
+      if (!progress) {
+        progress = new LevelProgress({
+          userId,
+          category,
+          level,
+          puzzlesSolved: 0,
+          totalPuzzles: 5,
+          completed: false
+        });
+      }
+      
+      progress.puzzlesSolved++;
+      
+      // Check if level is completed (all 5 puzzles solved)
+      if (progress.puzzlesSolved >= progress.totalPuzzles && !progress.completed) {
+        progress.completed = true;
+        progress.completedAt = new Date();
+        console.log(`🎉 Level completed: ${category} Level ${level} by user ${userId}`);
+      }
+      
+      await progress.save();
+      
+    } else {
+      // Memory storage
+      let progress = memoryLevelProgress.find(p => 
+        p.userId === userId && p.category === category && p.level === level
+      );
+      
+      if (!progress) {
+        progress = {
+          userId,
+          category,
+          level,
+          puzzlesSolved: 0,
+          totalPuzzles: 5,
+          completed: false,
+          completedAt: null
+        };
+        memoryLevelProgress.push(progress);
+      }
+      
+      progress.puzzlesSolved++;
+      
+      if (progress.puzzlesSolved >= progress.totalPuzzles && !progress.completed) {
+        progress.completed = true;
+        progress.completedAt = new Date();
+        console.log(`🎉 Level completed: ${category} Level ${level} by user ${userId}`);
+      }
+    }
+  } catch (error) {
+    console.error('Level progress update error:', error);
   }
 };
 
@@ -202,7 +267,9 @@ const puzzles = {
         category: 'math',
         level: 1,
         position: 0,
-        correctAnswers: ['42', 'forty-two', 'forty two']
+        correctAnswers: ['42', 'forty-two', 'forty two'],
+        hint: 'Try adding the ones place first ($5 + 7$), then the tens place ($10 + 20$). 🔢',
+        explanation: 'The answer is 42. When adding $15 + 27$, you can break it down: $15 + 27 = (10 + 20) + (5 + 7) = 30 + 12 = 42$. Always line up the place values!'
       },
       {
         _id: 'math-1-1',
@@ -211,7 +278,9 @@ const puzzles = {
         category: 'math',
         level: 1,
         position: 1,
-        correctAnswers: ['56', 'fifty-six', 'fifty six']
+        correctAnswers: ['56', 'fifty-six', 'fifty six'],
+        hint: 'Think of it as 7 groups of 8, or use the times table trick: $7 × 8$ is close to $7 × 10 = 70$. 📐',
+        explanation: 'The answer is 56. You can think of $7 × 8$ as adding 8 seven times: $8+8+8+8+8+8+8 = 56$. Or remember that $7 × 8 = (7 × 10) - (7 × 2) = 70 - 14 = 56$.'
       },
       {
         _id: 'math-1-2',
@@ -220,7 +289,9 @@ const puzzles = {
         category: 'math',
         level: 1,
         position: 2,
-        correctAnswers: ['12', 'twelve']
+        correctAnswers: ['12', 'twelve'],
+        hint: 'Think: how many 12s fit into 144? Try counting by 12s or use multiplication facts. ➗',
+        explanation: 'The answer is 12. Division asks "how many groups?" So $144 ÷ 12$ asks "how many 12s make 144?" Since $12 × 12 = 144$, the answer is 12.'
       },
       {
         _id: 'math-1-3',
@@ -229,7 +300,9 @@ const puzzles = {
         category: 'math',
         level: 1,
         position: 3,
-        correctAnswers: ['46', 'forty-six', 'forty six']
+        correctAnswers: ['46', 'forty-six', 'forty six'],
+        hint: 'You might need to borrow from the tens place. Or try adding up: $39 + ? = 85$. 🔄',
+        explanation: 'The answer is 46. When subtracting $85 - 39$, you can borrow: 85 becomes $75 + 10$, so $(75 - 30) + (15 - 9) = 45 + 1 = 46$. Or count up from 39 to 85.'
       },
       {
         _id: 'math-1-4',
@@ -238,7 +311,9 @@ const puzzles = {
         category: 'math',
         level: 1,
         position: 4,
-        correctAnswers: ['11', 'eleven']
+        correctAnswers: ['11', 'eleven'],
+        hint: 'Remember PEMDAS! Multiplication comes before addition. Do $3 × 2$ first. ⚡',
+        explanation: 'The answer is 11. Using order of operations (PEMDAS), multiply first: $3 × 2 = 6$, then add: $5 + 6 = 11$. If you did left to right ($5 + 3 = 8$, then $8 × 2 = 16$), that would be incorrect!'
       }
     ],
     2: [
@@ -249,7 +324,9 @@ const puzzles = {
         category: 'math',
         level: 2,
         position: 0,
-        correctAnswers: ['1', 'one', '4/4', '1.0']
+        correctAnswers: ['1', 'one', '4/4', '1.0'],
+        hint: 'Same denominator makes this easy! Just add the numerators: $3 + 1$. 🍕',
+        explanation: 'The answer is 1. When fractions have the same denominator, add the numerators: $3/4 + 1/4 = (3+1)/4 = 4/4 = 1$. Think of it as 3 pizza slices plus 1 pizza slice equals 4 slices, which is a whole pizza!'
       },
       {
         _id: 'math-2-1',
@@ -258,7 +335,9 @@ const puzzles = {
         category: 'math',
         level: 2,
         position: 1,
-        correctAnswers: ['20', 'twenty']
+        correctAnswers: ['20', 'twenty'],
+        hint: '$25\\% = 1/4$, so you need to find one-fourth of 80. What is $80 ÷ 4$? 📊',
+        explanation: 'The answer is 20. $25\%$ means $25/100$ or $1/4$. So $25\%$ of $80 = 1/4 × 80 = 80 ÷ 4 = 20$. You can also think: $25\%$ of $100 = 25$, so $25\%$ of $80$ would be a bit less.'
       },
       {
         _id: 'math-2-2',
@@ -267,7 +346,9 @@ const puzzles = {
         category: 'math',
         level: 2,
         position: 2,
-        correctAnswers: ['8', 'eight']
+        correctAnswers: ['8', 'eight'],
+        hint: 'What number times itself equals 64? Try some perfect squares: $6×6$, $7×7$, $8×8$... $\\sqrt{}$',
+        explanation: 'The answer is 8. The square root asks "what number times itself gives 64?" Since $8 × 8 = 64$, $\\sqrt{64} = 8$. Perfect squares are handy to memorize!'
       },
       {
         _id: 'math-2-3',
@@ -276,7 +357,9 @@ const puzzles = {
         category: 'math',
         level: 2,
         position: 3,
-        correctAnswers: ['24', 'twenty-four', 'twenty four']
+        correctAnswers: ['24', 'twenty-four', 'twenty four'],
+        hint: 'Area of rectangle = length $\\times$ width. Just multiply the two dimensions! 📐',
+        explanation: 'The answer is 24. For a rectangle, Area = length $\\times$ width $= 6 × 4 = 24$ square units. Imagine a $6\\times4$ grid of squares - count them all and you get 24!'
       },
       {
         _id: 'math-2-4',
@@ -285,7 +368,9 @@ const puzzles = {
         category: 'math',
         level: 2,
         position: 4,
-        correctAnswers: ['7', 'seven']
+        correctAnswers: ['7', 'seven'],
+        hint: 'What number plus 5 equals 12? Or subtract 5 from both sides of the equation. 🎯',
+        explanation: 'The answer is 7. To solve $x + 5 = 12$, subtract 5 from both sides: $x + 5 - 5 = 12 - 5$, so $x = 7$. Check: $7 + 5 = 12$ ✓'
       }
     ],
     3: [
@@ -296,7 +381,9 @@ const puzzles = {
         category: 'math',
         level: 3,
         position: 0,
-        correctAnswers: ['1/2', '0.5', 'half', 'one half']
+        correctAnswers: ['1/2', '0.5', 'half', 'one half'],
+        hint: 'Multiply numerators together, denominators together: $(2\\times3)/(3\\times4)$. Then simplify! $\\times$',
+        explanation: 'The answer is $1/2$. When multiplying fractions: $(2/3) × (3/4) = (2\\times3)/(3\\times4) = 6/12$. Simplify by dividing both by 6: $6/12 = 1/2$. You can also cancel the 3s before multiplying.'
       },
       {
         _id: 'math-3-1',
@@ -305,7 +392,9 @@ const puzzles = {
         category: 'math',
         level: 3,
         position: 1,
-        correctAnswers: ['5 and -5', '-5 and 5', '±5', 'plus or minus 5']
+        correctAnswers: ['5 and -5', '-5 and 5', '±5', 'plus or minus 5'],
+        hint: 'What number times itself is 25? Don\'t forget negative numbers: $(-5) × (-5) = 25$ too! $\\pm$',
+        explanation: 'The answer is $\\pm5$ (plus or minus 5). Since $5^2 = 25$ and $(-5)^2 = 25$, both $x = 5$ and $x = -5$ are solutions. Remember: any positive number has two square roots!'
       },
       {
         _id: 'math-3-2',
@@ -314,7 +403,9 @@ const puzzles = {
         category: 'math',
         level: 3,
         position: 2,
-        correctAnswers: ['121', '$121', '121 dollars']
+        correctAnswers: ['121', '$121', '121 dollars'],
+        hint: 'Year 1: $100 + 10\\% = $110$. Year 2: $110 + 10\\%$ of $110$. Interest earns interest! 💰',
+        explanation: 'The answer is $121. Year 1: $100 \\times 1.10 = $110$. Year 2: $110 \\times 1.10 = $121. The formula is: Final = Principal $\\times$ $(1 + rate)^{years} = 100 \\times (1.10)^2 = $121.'
       },
       {
         _id: 'math-3-3',
@@ -323,7 +414,9 @@ const puzzles = {
         category: 'math',
         level: 3,
         position: 3,
-        correctAnswers: ['1', 'one']
+        correctAnswers: ['1', 'one'],
+        hint: 'Think of the unit circle. At $90^{\\circ}$, you\'re at the top point $(0, 1)$. What does $\\sin(\\theta)$ represent? 🔄',
+        explanation: 'The answer is 1. On the unit circle, $\\sin(90^{\\circ})$ represents the $y$-coordinate at $90^{\\circ}$, which is the topmost point $(0,1)$. So $\\sin(90^{\\circ}) = 1$.'
       },
       {
         _id: 'math-3-4',
@@ -332,7 +425,9 @@ const puzzles = {
         category: 'math',
         level: 3,
         position: 4,
-        correctAnswers: ['3', 'three']
+        correctAnswers: ['3', 'three'],
+        hint: 'Logarithm asks: "10 to what power equals 1000?" Think: $10^1 = 10$, $10^2 = 100$, $10^3 = ?$ 📈',
+        explanation: 'The answer is 3. $\\log_{10}(1000)$ asks "10 to what power equals 1000?" Since $10^3 = 1000$, the answer is 3. Logs are the inverse of exponents!'
       }
     ]
   },
@@ -345,7 +440,9 @@ const puzzles = {
         category: 'logic',
         level: 1,
         position: 0,
-        correctAnswers: ['10', 'ten']
+        correctAnswers: ['10', 'ten'],
+        hint: 'Look at the differences between numbers. What\'s $4-2$? What\'s $6-4$? See the pattern? 📈',
+        explanation: 'The answer is 10. This sequence increases by 2 each time: 2, $4(+2)$, $6(+2)$, $8(+2)$, $10(+2)$. It\'s the even numbers!'
       },
       {
         _id: 'logic-1-1',
@@ -354,7 +451,9 @@ const puzzles = {
         category: 'logic',
         level: 1,
         position: 1,
-        correctAnswers: ['carrot', 'Carrot']
+        correctAnswers: ['carrot', 'Carrot'],
+        hint: 'Think about categories. Three of these grow on trees or plants above ground... 🌳',
+        explanation: 'The answer is **Carrot**. Apple, Banana, and Orange are all fruits that typically grow above ground, while a carrot is a vegetable that grows underground (it\'s a root).'
       },
       {
         _id: 'logic-1-2',
@@ -363,7 +462,9 @@ const puzzles = {
         category: 'logic',
         level: 1,
         position: 2,
-        correctAnswers: ['yes', 'Yes', 'true', 'True']
+        correctAnswers: ['yes', 'Yes', 'true', 'True'],
+        hint: 'Follow the chain: Bloops $\\rightarrow$ Razzles $\\rightarrow$ Lazzles. If A leads to B, and B leads to C, then A leads to C! 🔗',
+        explanation: 'The answer is **Yes**. This is called a syllogism or transitivity. If all Bloops are in the Razzles group, and all Razzles are in the Lazzles group, then all Bloops must logically be in the Lazzles group.'
       },
       {
         _id: 'logic-1-3',
@@ -372,7 +473,9 @@ const puzzles = {
         category: 'logic',
         level: 1,
         position: 3,
-        correctAnswers: ['I', 'i']
+        correctAnswers: ['I', 'i'],
+        hint: 'Count the positions in the alphabet. A=1, C=3, E=5, G=7... What comes next? 🔤',
+        explanation: 'The answer is **I**. This sequence skips every other letter: A(1st), C(3rd), E(5th), G(7th), I(9th). It\'s the odd-positioned letters of the alphabet!'
       },
       {
         _id: 'logic-1-4',
@@ -381,7 +484,9 @@ const puzzles = {
         category: 'logic',
         level: 1,
         position: 4,
-        correctAnswers: ['Thursday', 'thursday']
+        correctAnswers: ['Thursday', 'thursday'],
+        hint: 'There are 7 days in a week. So 10 days = 7 days + 3 days. After a full week, count 3 more days! 📅',
+        explanation: 'The answer is **Thursday**. 10 days = 1 full week (7 days) + 3 days. Starting from Monday, after 7 days it\'s Monday again, then count 3 more: Tuesday, Wednesday, Thursday.'
       }
     ],
     2: [
@@ -392,7 +497,9 @@ const puzzles = {
         category: 'logic',
         level: 2,
         position: 0,
-        correctAnswers: ['13', 'thirteen']
+        correctAnswers: ['13', 'thirteen'],
+        hint: 'Each number is the sum of the two before it. $1+1=2$, $1+2=3$, $2+3=5$, $3+5=8$... 🌀',
+        explanation: 'The answer is 13. This is the **Fibonacci sequence**, where each number equals the sum of the two preceding ones: $5 + 8 = 13$.'
       },
       {
         _id: 'logic-2-1',
@@ -401,7 +508,9 @@ const puzzles = {
         category: 'logic',
         level: 2,
         position: 1,
-        correctAnswers: ['no', 'false', 'invalid', 'incorrect']
+        correctAnswers: ['no', 'false', 'invalid', 'incorrect'],
+        hint: 'Draw circles to represent the groups. Can cats and dogs overlap just because they\'re both mammals? 🐱🐶',
+        explanation: 'The answer is **No/Invalid**. Just because cats and dogs share a category (mammals) does not mean they overlap. There\'s no direct link established between the "cats" set and the "dogs" set.'
       },
       {
         _id: 'logic-2-2',
@@ -410,7 +519,9 @@ const puzzles = {
         category: 'logic',
         level: 2,
         position: 2,
-        correctAnswers: ['4', 'four']
+        correctAnswers: ['4', 'four'],
+        hint: 'Draw a $3\\times3$ square. How many corners does any square have? ⏹️',
+        explanation: 'The answer is 4. A square grid, regardless of size (like $3\\times3$), always has exactly 4 corners. The X marks are at positions (1,1), (1,3), (3,1), and (3,3).'
       },
       {
         _id: 'logic-2-3',
@@ -419,7 +530,9 @@ const puzzles = {
         category: 'logic',
         level: 2,
         position: 3,
-        correctAnswers: ['8', 'eight']
+        correctAnswers: ['8', 'eight'],
+        hint: 'Union ($\cup$) combines sets. Maximum happens when sets have no overlap (they are **disjoint**). $5 + 3 = ?$ 🔄',
+        explanation: 'The answer is 8. The union $A \\cup B$ combines all elements. The maximum number of elements occurs when the two sets have no elements in common, so you simply add the counts: $5 + 3 = 8$.'
       },
       {
         _id: 'logic-2-4',
@@ -428,7 +541,9 @@ const puzzles = {
         category: 'logic',
         level: 2,
         position: 4,
-        correctAnswers: ['false', 'FALSE', 'False']
+        correctAnswers: ['false', 'FALSE', 'False'],
+        hint: 'The **AND** operator requires **BOTH** conditions to be true to return TRUE. If either is false, the result is false. ⚡',
+        explanation: 'The answer is **FALSE**. In Boolean logic, the conjunction $P \\land Q$ (P AND Q) is only true when $P$ is true and $Q$ is true. Since one is false, the result is false.'
       }
     ],
     3: [
@@ -439,7 +554,9 @@ const puzzles = {
         category: 'logic',
         level: 3,
         position: 0,
-        correctAnswers: ['36', 'thirty-six', 'thirty six']
+        correctAnswers: ['36', 'thirty-six', 'thirty six'],
+        hint: 'These are perfect squares! $1^2$, $2^2$, $3^2$, $4^2$, $5^2$... What\'s $6^2$? $^2$',
+        explanation: 'The answer is 36. This sequence shows the perfect squares of the natural numbers: $1^2=1$, $2^2=4$, $3^2=9$, $4^2=16$, $5^2=25$, so the next is $6^2=36$.'
       },
       {
         _id: 'logic-3-1',
@@ -448,7 +565,9 @@ const puzzles = {
         category: 'logic',
         level: 3,
         position: 1,
-        correctAnswers: ['neither', 'impossible', 'paradox', 'contradiction']
+        correctAnswers: ['neither', 'impossible', 'paradox', 'contradiction'],
+        hint: 'If they\'re a knight (truth), they\'d be saying they\'re a knave (lie), which is a contradiction. If they\'re a knave (lie), they\'d be lying about being a knave, meaning they\'d be a knight (contradiction!). 🤯',
+        explanation: 'The answer is **Neither/Impossible**. This statement creates a **paradox**. A knight cannot truthfully say they are a liar (knave), and a knave cannot lie and say they are a liar (knave). The scenario is logically impossible.'
       },
       {
         _id: 'logic-3-2',
@@ -457,7 +576,9 @@ const puzzles = {
         category: 'logic',
         level: 3,
         position: 2,
-        correctAnswers: ['P implies R', 'p implies r', 'P → R']
+        correctAnswers: ['P implies R', 'p implies r', 'P → R'],
+        hint: 'This is like a chain: P leads to Q, Q leads to R, so P leads to R. This is the **Law of Syllogism**. ⛓️',
+        explanation: 'The answer is **P implies R** (or $P \\rightarrow R$). This is a principle of logic called **transitivity** or the **Hypothetical Syllogism**. If the truth of P guarantees the truth of Q, and the truth of Q guarantees the truth of R, then the truth of P guarantees the truth of R.'
       },
       {
         _id: 'logic-3-3',
@@ -466,7 +587,9 @@ const puzzles = {
         category: 'logic',
         level: 3,
         position: 3,
-        correctAnswers: ['6', 'six']
+        correctAnswers: ['6', 'six'],
+        hint: 'For 3 distinct items, it\'s 3 factorial ($3!$). That\'s $3 \\times 2 \\times 1 = ?$ 🔀',
+        explanation: 'The answer is 6. This is a permutation problem. For 3 unique items, the number of arrangements is $3!$ (3 factorial), which is $3 \\times 2 \\times 1 = 6$. The arrangements are CAT, CTA, ACT, ATC, TCA, TAC.'
       },
       {
         _id: 'logic-3-4',
@@ -475,7 +598,9 @@ const puzzles = {
         category: 'logic',
         level: 3,
         position: 4,
-        correctAnswers: ['contradiction', 'Contradiction', 'paradox']
+        correctAnswers: ['contradiction', 'Contradiction', 'paradox'],
+        hint: 'The name of the proof method is the biggest hint: **Proof by...** $\\neg$',
+        explanation: 'The answer is a **Contradiction**. Proof by contradiction (or *reductio ad absurdum*) is a technique where you assume the opposite of what you want to prove ($\\sqrt{2}$ is rational) and show that this assumption leads to a statement that is logically impossible (a contradiction), thereby proving your original statement ($\\sqrt{2}$ is irrational).'
       }
     ]
   },
@@ -488,7 +613,9 @@ const puzzles = {
         category: 'riddles',
         level: 1,
         position: 0,
-        correctAnswers: ['keyboard', 'Keyboard', 'a keyboard']
+        correctAnswers: ['keyboard', 'Keyboard', 'a keyboard'],
+        hint: 'You use this to type. It involves "space" for typing and "keys" for letters. ⌨️',
+        explanation: 'The answer is a **Keyboard**. It has keys (for letters/functions), space (the space bar), and you "enter" (press the Enter key) but don\'t go inside.'
       },
       {
         _id: 'riddles-1-1',
@@ -497,7 +624,9 @@ const puzzles = {
         category: 'riddles',
         level: 1,
         position: 1,
-        correctAnswers: ['towel', 'Towel', 'a towel']
+        correctAnswers: ['towel', 'Towel', 'a towel'],
+        hint: 'Think about what you use after a shower. It absorbs things. 🛀',
+        explanation: 'The answer is a **Towel**. Its job is to dry you, but it becomes wet in the process of absorbing the moisture.'
       },
       {
         _id: 'riddles-1-2',
@@ -506,7 +635,9 @@ const puzzles = {
         category: 'riddles',
         level: 1,
         position: 2,
-        correctAnswers: ['candle', 'Candle', 'a candle']
+        correctAnswers: ['candle', 'Candle', 'a candle'],
+        hint: 'This object produces light and is used up over time. 🔥',
+        explanation: 'The answer is a **Candle**. When new ("young"), it\'s tall. As it burns down ("old"), it becomes shorter.'
       },
       {
         _id: 'riddles-1-3',
@@ -515,7 +646,9 @@ const puzzles = {
         category: 'riddles',
         level: 1,
         position: 3,
-        correctAnswers: ['clock', 'Clock', 'a clock', 'watch', 'a watch']
+        correctAnswers: ['clock', 'Clock', 'a clock', 'watch', 'a watch'],
+        hint: 'It measures the passage of time. ⏱️',
+        explanation: 'The answer is a **Clock** (or a watch). The indicators on its face that point to the minutes and hours are called "hands."'
       },
       {
         _id: 'riddles-1-4',
@@ -524,7 +657,9 @@ const puzzles = {
         category: 'riddles',
         level: 1,
         position: 4,
-        correctAnswers: ['age', 'Age', 'your age']
+        correctAnswers: ['age', 'Age', 'your age'],
+        hint: 'This is measured in years. Everyone has it. 🎂',
+        explanation: 'The answer is your **Age**. Once you turn a year older, you don\'t turn a year younger; it only ever increases.'
       }
     ],
     2: [
@@ -535,7 +670,9 @@ const puzzles = {
         category: 'riddles',
         level: 2,
         position: 0,
-        correctAnswers: ['he is short', 'too short', 'cant reach', 'short', 'height']
+        correctAnswers: ['he is short', 'too short', 'cant reach', 'short', 'height'],
+        hint: 'The explanation is very simple, involving his physical ability to press a button. 🤏',
+        explanation: 'The answer is **He is too short to reach the button for the 20th floor**. He can only reach the button for the 10th floor (or maybe he uses his umbrella/a neighbor for the other floors, but the classic answer is height).'
       },
       {
         _id: 'riddles-2-1',
@@ -544,7 +681,9 @@ const puzzles = {
         category: 'riddles',
         level: 2,
         position: 1,
-        correctAnswers: ['silence', 'Silence']
+        correctAnswers: ['silence', 'Silence'],
+        hint: 'The word itself describes an absence of sound. 🤫',
+        explanation: 'The answer is **Silence**. The moment you speak the word "silence," you create sound, and thus the condition of silence is broken.'
       },
       {
         _id: 'riddles-2-2',
@@ -553,7 +692,9 @@ const puzzles = {
         category: 'riddles',
         level: 2,
         position: 2,
-        correctAnswers: ['map', 'Map', 'a map']
+        correctAnswers: ['map', 'Map', 'a map'],
+        hint: 'You use me to find your way. I am a flat representation of the world. 🗺️',
+        explanation: 'The answer is a **Map**. A map contains symbols for cities, mountains, and bodies of water, but they are only representations, not the actual things.'
       },
       {
         _id: 'riddles-2-3',
@@ -562,7 +703,9 @@ const puzzles = {
         category: 'riddles',
         level: 2,
         position: 3,
-        correctAnswers: ['m', 'M', 'letter m', 'the letter m']
+        correctAnswers: ['m', 'M', 'letter m', 'the letter m'],
+        hint: 'Look closely at the spelling of the words in the prompt. Which letter is present? 🔠',
+        explanation: 'The answer is the **Letter M**. The letter "M" appears once in "minute," twice in "moment," and zero times in "thousand years."'
       },
       {
         _id: 'riddles-2-4',
@@ -571,7 +714,9 @@ const puzzles = {
         category: 'riddles',
         level: 2,
         position: 4,
-        correctAnswers: ['footsteps', 'Footsteps', 'steps']
+        correctAnswers: ['footsteps', 'Footsteps', 'steps'],
+        hint: 'This is what you create when you walk on a soft surface like mud or snow. 👣',
+        explanation: 'The answer is **Footsteps** (or steps). The more steps you take, the more you leave behind a trail of your footprints.'
       }
     ],
     3: [
@@ -582,7 +727,9 @@ const puzzles = {
         category: 'riddles',
         level: 3,
         position: 0,
-        correctAnswers: ['grandfather father son', 'three generations', 'grandpa dad son', '3 people']
+        correctAnswers: ['grandfather father son', 'three generations', 'grandpa dad son', '3 people'],
+        hint: 'Consider the relationships in a family tree. One person can hold two roles! 👴👨‍👦',
+        explanation: 'The answer is that there were only **three people** fishing: a **grandfather**, his **son** (who is also a father), and his **grandson** (who is also a son). The son is both a father and a son.'
       },
       {
         _id: 'riddles-3-1',
@@ -591,7 +738,9 @@ const puzzles = {
         category: 'riddles',
         level: 3,
         position: 1,
-        correctAnswers: ['seven', 'Seven', '7']
+        correctAnswers: ['seven', 'Seven', '7'],
+        hint: 'Think about spelling out the numbers one by one. Which odd number, when you remove one letter, leaves an even number\'s spelling? ✍️',
+        explanation: 'The answer is **Seven**. Remove the "s" from "seven" and you are left with "even."'
       },
       {
         _id: 'riddles-3-2',
@@ -600,7 +749,9 @@ const puzzles = {
         category: 'riddles',
         level: 3,
         position: 2,
-        correctAnswers: ['stamp', 'Stamp', 'a stamp', 'postage stamp']
+        correctAnswers: ['stamp', 'Stamp', 'a stamp', 'postage stamp'],
+        hint: 'It\'s small, sticky, and you put it on the corner of an envelope. ✉️',
+        explanation: 'The answer is a **Stamp** (specifically a postage stamp). It stays fixed in the corner of an envelope, but the envelope can travel around the world.'
       },
       {
         _id: 'riddles-3-3',
@@ -609,7 +760,9 @@ const puzzles = {
         category: 'riddles',
         level: 3,
         position: 3,
-        correctAnswers: ['fire', 'Fire', 'flame']
+        correctAnswers: ['fire', 'Fire', 'flame'],
+        hint: 'This is used for cooking and heat, and it can spread quickly. 🔥',
+        explanation: 'The answer is **Fire**. It grows bigger, needs oxygen (air) to burn, and is put out by water.'
       },
       {
         _id: 'riddles-3-4',
@@ -618,7 +771,9 @@ const puzzles = {
         category: 'riddles',
         level: 3,
         position: 4,
-        correctAnswers: ['silence', 'Silence']
+        correctAnswers: ['silence', 'Silence'],
+        hint: 'This is the same as logic-2-1. If you speak its name, it vanishes. 🤫',
+        explanation: 'The answer is **Silence**. Speaking the word breaks the silence. This is a common and clever riddle!'
       }
     ]
   },
@@ -631,7 +786,9 @@ const puzzles = {
         category: 'patterns',
         level: 1,
         position: 0,
-        correctAnswers: ['triangle', 'Triangle']
+        correctAnswers: ['triangle', 'Triangle'],
+        hint: 'The pattern repeats every three shapes. What\'s the third shape in the cycle? 🔺',
+        explanation: 'The answer is **Triangle**. The sequence is a repeating pattern of (Circle, Square, Triangle). The next shape in the cycle is the Triangle.'
       },
       {
         _id: 'patterns-1-1',
@@ -640,7 +797,9 @@ const puzzles = {
         category: 'patterns',
         level: 1,
         position: 1,
-        correctAnswers: ['blue', 'Blue']
+        correctAnswers: ['blue', 'Blue'],
+        hint: 'The colors are simply alternating. What color is the opposite of the last one listed? 🔴🔵',
+        explanation: 'The answer is **Blue**. This is an alternating pattern of (Red, Blue). Since the last color was Red, the next must be Blue.'
       },
       {
         _id: 'patterns-1-2',
@@ -649,7 +808,9 @@ const puzzles = {
         category: 'patterns',
         level: 1,
         position: 2,
-        correctAnswers: ['16', 'sixteen']
+        correctAnswers: ['16', 'sixteen'],
+        hint: 'Each number is twice the previous number. $8 \\times 2 = ?$ $\\times 2$',
+        explanation: 'The answer is 16. This is a **geometric sequence** where each term is the previous term multiplied by 2. $8 \\times 2 = 16$.'
       },
       {
         _id: 'patterns-1-3',
@@ -658,7 +819,9 @@ const puzzles = {
         category: 'patterns',
         level: 1,
         position: 3,
-        correctAnswers: ['I', 'i']
+        correctAnswers: ['I', 'i'],
+        hint: 'It skips one letter between each term in the alphabet (B, D, F, H...). 🔠',
+        explanation: 'The answer is **I**. This pattern skips one letter each time: A(skip B)C(skip D)E(skip F)G(skip H)I.'
       },
       {
         _id: 'patterns-1-4',
@@ -667,7 +830,9 @@ const puzzles = {
         category: 'patterns',
         level: 1,
         position: 4,
-        correctAnswers: ['15', 'fifteen']
+        correctAnswers: ['15', 'fifteen'],
+        hint: 'Look at the amount added each time: $+2$, $+3$, $+4$... What comes next? $\\triangle$',
+        explanation: 'The answer is 15. The pattern is adding consecutive numbers: $1+2=3$, $3+3=6$, $6+4=10$, so the next is $10+5=15$. These are also called **triangular numbers**.'
       }
     ],
     2: [
@@ -678,7 +843,9 @@ const puzzles = {
         category: 'patterns',
         level: 2,
         position: 0,
-        correctAnswers: ['42', 'forty-two']
+        correctAnswers: ['42', 'forty-two'],
+        hint: 'Look at the difference between the terms: $+4$, $+6$, $+8$, $+10$... What comes next? ⬆️',
+        explanation: 'The answer is 42. The difference between consecutive terms increases by 2 each time: $2(+4)6(+6)12(+8)20(+10)30$. The next difference is $+12$, so $30+12=42$.'
       },
       {
         _id: 'patterns-2-1',
@@ -687,7 +854,9 @@ const puzzles = {
         category: 'patterns',
         level: 2,
         position: 1,
-        correctAnswers: ['16', 'sixteen']
+        correctAnswers: ['16', 'sixteen'],
+        hint: 'There are two interleaved sequences. The odd-positioned numbers ($1, 2, 3, 4...$) and the even-positioned numbers ($4, 8, 12...$). 📊',
+        explanation: 'The answer is 16. This is a sequence of two interleaved patterns: $1, 2, 3, 4$ (adding 1) and $4, 8, 12$ (adding 4, or multiplying by $1\\times4, 2\\times4, 3\\times4, 4\\times4$). The next number is from the second sequence: $4 \\times 4 = 16$.'
       },
       {
         _id: 'patterns-2-2',
@@ -696,7 +865,9 @@ const puzzles = {
         category: 'patterns',
         level: 2,
         position: 2,
-        correctAnswers: ['13', 'thirteen']
+        correctAnswers: ['13', 'thirteen'],
+        hint: 'These numbers are only divisible by 1 and themselves. What is the next number in this special set? 🌟',
+        explanation: 'The answer is 13. This sequence is the list of **Prime Numbers**: numbers greater than 1 that have no positive divisors other than 1 and themselves. The prime numbers are 2, 3, 5, 7, 11, 13...'
       },
       {
         _id: 'patterns-2-3',
@@ -705,7 +876,9 @@ const puzzles = {
         category: 'patterns',
         level: 2,
         position: 3,
-        correctAnswers: ['243', 'two hundred forty-three']
+        correctAnswers: ['243', 'two hundred forty-three'],
+        hint: 'Each number is the previous one multiplied by 3. $81 \\times 3 = ?$ $\\times 3$',
+        explanation: 'The answer is 243. This is a **geometric sequence** where each term is the previous term multiplied by 3. $81 \\times 3 = 243$. It can also be seen as powers of 3: $3^1, 3^2, 3^3, 3^4, 3^5$.'
       },
       {
         _id: 'patterns-2-4',
@@ -714,7 +887,9 @@ const puzzles = {
         category: 'patterns',
         level: 2,
         position: 4,
-        correctAnswers: ['29', 'twenty-nine']
+        correctAnswers: ['29', 'twenty-nine'],
+        hint: 'Add the two previous numbers to get the next one. $11 + 18 = ?$ ➕',
+        explanation: 'The answer is 29. This is a variation of the Fibonacci sequence where each number is the sum of the two preceding numbers: $1+3=4$, $3+4=7$, $4+7=11$, $7+11=18$, so the next is $11+18=29$.'
       }
     ],
     3: [
@@ -725,7 +900,9 @@ const puzzles = {
         category: 'patterns',
         level: 3,
         position: 0,
-        correctAnswers: ['720', 'seven hundred twenty']
+        correctAnswers: ['720', 'seven hundred twenty'],
+        hint: 'Look at the multiplying factor: $\\times1, \\times2, \\times3, \\times4, \\times5$... What\'s next? $!$',
+        explanation: 'The answer is 720. This is the **Factorial** sequence ($n!$): $1! = 1$, $2! = 2$, $3! = 6$, $4! = 24$, $5! = 120$, and the next is $6! = 6 \\times 5 \\times 4 \\times 3 \\times 2 \\times 1 = 720$. (Note: some definitions start at $0! = 1$).'
       },
       {
         _id: 'patterns-3-1',
@@ -734,7 +911,9 @@ const puzzles = {
         category: 'patterns',
         level: 3,
         position: 1,
-        correctAnswers: ['125', 'one hundred twenty-five']
+        correctAnswers: ['125', 'one hundred twenty-five'],
+        hint: 'These numbers are perfect cubes: $0^3, 1^3, 2^3, 3^3, 4^3$... What\'s $5^3$? $^3$',
+        explanation: 'The answer is 125. This sequence shows the perfect cubes of the integers, starting from 0: $0^3=0$, $1^3=1$, $2^3=8$, $3^3=27$, $4^3=64$, so the next is $5^3 = 5 \\times 5 \\times 5 = 125$.'
       },
       {
         _id: 'patterns-3-2',
@@ -743,7 +922,9 @@ const puzzles = {
         category: 'patterns',
         level: 3,
         position: 2,
-        correctAnswers: ['10', 'ten']
+        correctAnswers: ['10', 'ten'],
+        hint: 'You just need to add the given numbers together. What is $1 + 2 + 3 + 4$? $\\sum$',
+        explanation: 'The answer is 10. The sum of the main diagonal elements (or trace) is simply the addition of the given numbers: $1 + 2 + 3 + 4 = 10$.'
       },
       {
         _id: 'patterns-3-3',
@@ -752,7 +933,9 @@ const puzzles = {
         category: 'patterns',
         level: 3,
         position: 3,
-        correctAnswers: ['13', 'thirteen']
+        correctAnswers: ['13', 'thirteen'],
+        hint: 'Calculate term-by-term: $a(3)=a(2)+a(1) = 3+2=5$. Then $a(4)=a(3)+a(2)...$ 🧮',
+        explanation: 'The answer is 13. This is a recursive sequence: $a(n)$ is the sum of the two preceding terms. $a(1)=2$, $a(2)=3$. $a(3)=3+2=5$. $a(4)=5+3=8$. $a(5)=8+5=13$.'
       },
       {
         _id: 'patterns-3-4',
@@ -761,7 +944,9 @@ const puzzles = {
         category: 'patterns',
         level: 3,
         position: 4,
-        correctAnswers: ['252', 'two hundred fifty-two']
+        correctAnswers: ['252', 'two hundred fifty-two'],
+        hint: 'Look for the relationship: $1^2\\times2$, $2^2\\times3$, $3^2\\times4$, $4^2\\times5$, $5^2\\times6$... What\'s $6^2\\times7$? $\\times$',
+        explanation: 'The answer is 252. The pattern is $n^2 \\times (n+1)$, where $n$ is the index starting from 1. The next term is $6^2 \\times (6+1) = 36 \\times 7 = 252$.'
       }
     ]
   }
@@ -919,16 +1104,38 @@ app.post('/api/puzzles/:id/validate', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Puzzle not found' });
     }
     
-    // First check exact matches (faster)
+    // Enhanced local validation (more flexible matching)
+    const userAnswer = answer.toLowerCase().trim();
     const exactMatch = puzzle.correctAnswers.some(correctAnswer => 
-      correctAnswer.toLowerCase().trim() === answer.toLowerCase().trim()
+      correctAnswer.toLowerCase().trim() === userAnswer
     );
     
+    // Additional flexible matching without AI
     let correct = exactMatch;
-    let aiResponse = null;
+    if (!correct) {
+      // Remove common variations and try again
+      const normalizedUser = userAnswer
+        .replace(/[.,!?;]/g, '') // Remove punctuation
+        .replace(/\s+/g, ' ') // Normalize spaces
+        .replace(/^(a|an|the)\s+/i, ''); // Remove articles
+        
+      correct = puzzle.correctAnswers.some(correctAnswer => {
+        const normalizedCorrect = correctAnswer.toLowerCase().trim()
+          .replace(/[.,!?;]/g, '')
+          .replace(/\s+/g, ' ')
+          .replace(/^(a|an|the)\s+/i, '');
+        
+        return normalizedCorrect === normalizedUser ||
+               // Check if it's a number word vs digit
+               (normalizedUser.match(/^\d+$/) && correctAnswer.toLowerCase().includes(normalizedUser)) ||
+               // Check partial matches for longer answers
+               (normalizedUser.length > 3 && normalizedCorrect.includes(normalizedUser));
+      });
+    }
     
-    // If no exact match, use AI validation
-    if (!exactMatch && process.env.OPENAI_API_KEY) {
+    // Try AI validation if available and local validation failed
+    let aiResponse = null;
+    if (!correct && openai) {
       try {
         const completion = await openai.chat.completions.create({
           model: "gpt-3.5-turbo",
@@ -966,16 +1173,15 @@ app.post('/api/puzzles/:id/validate', authenticateToken, async (req, res) => {
         
       } catch (aiError) {
         console.error('AI validation error:', aiError);
-        // Fall back to exact match only
-        correct = exactMatch;
       }
     }
     
     console.log(`✅ Answer "${answer}" for puzzle "${puzzle.title}" is ${correct ? 'correct' : 'wrong'}`);
     
-    // Update streak if correct
+    // Update streak and level progress if correct
     if (correct) {
       await updateStreak(userId);
+      await updateLevelProgress(userId, puzzle.category, puzzle.level);
     }
     
     const responseMessage = correct 
@@ -984,9 +1190,12 @@ app.post('/api/puzzles/:id/validate', authenticateToken, async (req, res) => {
         ? `Not quite right. ${aiResponse.split('INCORRECT')[1]?.trim() || 'Try again!'} 🤔`
         : 'Not quite right. Give it another try! 🤔';
     
+    // ALWAYS include explanation for learning (whether correct or incorrect)
     res.json({
       correct,
-      message: responseMessage
+      message: responseMessage,
+      explanation: puzzle.explanation || `The answer is ${puzzle.correctAnswers[0]}. Keep practicing!`,
+      answer: puzzle.correctAnswers[0] // Include the correct answer for reference
     });
   } catch (error) {
     console.error('Validation error:', error);
@@ -1013,34 +1222,21 @@ app.post('/api/puzzles/:id/hint', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Puzzle not found' });
     }
     
-    let hint = 'Think step by step and look for patterns! 💡';
+    let hint = puzzle.hint || 'Think step by step and look for patterns! 💡';
     
-    if (process.env.OPENAI_API_KEY) {
+    // Try AI-generated hint if available (as backup)
+    if (openai && Math.random() < 0.3) { // Only use AI 30% of the time for variety
       try {
         const completion = await openai.chat.completions.create({
           model: "gpt-3.5-turbo",
           messages: [
             {
               role: "system",
-              content: `You are a helpful tutor for a brain training app. Give hints that guide users toward the answer without giving it away directly.
-
-              Guidelines:
-              - Don't reveal the answer
-              - Provide a useful strategy or approach
-              - Keep hints encouraging and educational
-              - Make hints specific to the question type
-              - Use emojis to make it friendly
-              - Keep hints under 100 characters when possible`
+              content: `You are a helpful tutor. Give hints that guide users toward the answer without giving it away.`
             },
             {
               role: "user",
-              content: `Give a helpful hint for this ${puzzle.category} puzzle:
-
-              Question: ${puzzle.prompt}
-              Category: ${puzzle.category}
-              Level: ${puzzle.level}
-              
-              (Don't reveal the answer: ${puzzle.correctAnswers[0]})`
+              content: `Give a different hint for: ${puzzle.prompt}`
             }
           ],
           max_tokens: 80,
@@ -1050,15 +1246,8 @@ app.post('/api/puzzles/:id/hint', authenticateToken, async (req, res) => {
         hint = completion.choices[0].message.content.trim();
         
       } catch (aiError) {
-        console.error('AI hint error:', aiError);
-        // Use category-specific fallback hints
-        const categoryHints = {
-          math: 'Break down the problem step by step. What operation do you need? 🔢',
-          logic: 'Look for the pattern or rule. What connects the pieces? 🧩',
-          riddles: 'Think outside the box! What could have a double meaning? 🤔',
-          patterns: 'What changes between each element? Look for the sequence! 🔍'
-        };
-        hint = categoryHints[puzzle.category] || hint;
+        // Use the hardcoded hint
+        hint = puzzle.hint;
       }
     }
     
@@ -1070,7 +1259,7 @@ app.post('/api/puzzles/:id/hint', authenticateToken, async (req, res) => {
   }
 });
 
-//Give up (protected)
+//Skip (protected)
 app.post('/api/puzzles/:id/skip', authenticateToken, async (req, res) => {
   try {
     const puzzleId = req.params.id;
@@ -1089,34 +1278,21 @@ app.post('/api/puzzles/:id/skip', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Puzzle not found' });
     }
     
-    let explanation = `The answer is: ${puzzle.correctAnswers[0]}`;
+    let explanation = puzzle.explanation || `The answer is ${puzzle.correctAnswers[0]}. Keep practicing!`;
     
-    // Generate AI explanation if available
-    if (process.env.OPENAI_API_KEY) {
+    // Try AI explanation as backup (only sometimes for variety)
+    if (openai && Math.random() < 0.2) { // Only use AI 20% of the time
       try {
         const completion = await openai.chat.completions.create({
           model: "gpt-3.5-turbo",
           messages: [
             {
               role: "system",
-              content: `You are explaining puzzle solutions in a brain training app. Provide clear, educational explanations that help users understand the reasoning.
-
-              Guidelines:
-              - Start with the answer
-              - Explain the logic or method used
-              - Keep it educational and encouraging
-              - Use simple language
-              - Make it under 150 words
-              - End with encouragement`
+              content: `Explain puzzle solutions clearly and educationally.`
             },
             {
               role: "user",
-              content: `Explain the solution to this ${puzzle.category} puzzle:
-
-              Question: ${puzzle.prompt}
-              Answer: ${puzzle.correctAnswers[0]}
-              Category: ${puzzle.category}
-              Level: ${puzzle.level}`
+              content: `Explain this solution: ${puzzle.prompt} Answer: ${puzzle.correctAnswers[0]}`
             }
           ],
           max_tokens: 120,
@@ -1126,7 +1302,7 @@ app.post('/api/puzzles/:id/skip', authenticateToken, async (req, res) => {
         explanation = completion.choices[0].message.content.trim();
         
       } catch (aiError) {
-        console.error('AI explanation error:', aiError);
+        explanation = puzzle.explanation;
       }
     }
     
@@ -1181,6 +1357,25 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Stats error:', error);
     res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+app.get('/api/progress', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    
+    if (mongoose.connection.readyState === 1) {
+      // MongoDB is available
+      const progress = await LevelProgress.find({ userId });
+      res.json({ progress });
+    } else {
+      // Memory storage
+      const progress = memoryLevelProgress.filter(p => p.userId === userId);
+      res.json({ progress });
+    }
+  } catch (error) {
+    console.error('Progress fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch progress' });
   }
 });
 

@@ -27,6 +27,10 @@ function App() {
   const [stats, setStats] = useState({ currentStreak: 0, totalPuzzlesSolved: 0, longestStreak: 0 });
   const [skipped, setSkipped] = useState(false);
   const [skipResult, setSkipResult] = useState(null);
+  const [showNext, setShowNext] = useState(false);
+  const [levelProgress, setLevelProgress] = useState([]);
+  const [showExplanation, setShowExplanation] = useState(false);
+
 
   // Auth form state
   const [isLogin, setIsLogin] = useState(true);
@@ -44,6 +48,7 @@ function App() {
       setUser(JSON.parse(userData));
       setView('home');
       fetchStats();
+      fetchLevelProgress(); // ADD THIS LINE
     }
   }, []);
 
@@ -107,6 +112,8 @@ function App() {
       setResult(null);
       setSkipped(false);
       setSkipResult(null);
+      setShowNext(false);
+      setShowExplanation(false); // ADD THIS LINE
     } catch (error) {
       console.error('Failed to fetch puzzles:', error);
       setPuzzles([]);
@@ -125,32 +132,39 @@ function App() {
         answer: answer.trim()
       });
       setResult(response.data);
+      setShowExplanation(true); // Always show explanation
       
       if (response.data.correct) {
-        fetchStats();
-        setTimeout(() => {
-          nextPuzzle();
-        }, 2000);
+        fetchStats(); // Refresh stats immediately
+        fetchLevelProgress(); // Refresh level progress
+        setShowNext(true); // Show next button
+      } else {
+        setShowNext(false); // Hide next button for wrong answers
       }
     } catch (error) {
       setResult({ correct: false, message: 'Error validating answer' });
+      setShowNext(false);
+      setShowExplanation(false);
     } finally {
       setLoading(false);
     }
   };
 
   const nextPuzzle = () => {
-  if (currentPuzzleIndex < puzzles.length - 1) {
-    setCurrentPuzzleIndex(currentPuzzleIndex + 1);
-    setAnswer('');
-    setResult(null);
-    setSkipped(false);      // ADD THIS LINE
-    setSkipResult(null);    // ADD THIS LINE
-  } else {
-    alert('🎉 Level completed! Great job!');
-    setView('categories');
-  }
-};
+    if (currentPuzzleIndex < puzzles.length - 1) {
+      setCurrentPuzzleIndex(currentPuzzleIndex + 1);
+      setAnswer('');
+      setResult(null);
+      setSkipped(false);
+      setSkipResult(null);
+      setShowNext(false);
+      setShowExplanation(false); // ADD THIS LINE
+    } else {
+      alert('🎉 Level completed! Great job!');
+      fetchLevelProgress(); // Refresh progress before going back
+      setView('categories');
+    }
+  };
 
   const getHint = async () => {
     try {
@@ -170,20 +184,54 @@ function App() {
   };
 
   const skipPuzzle = async () => {
-  try {
-    const currentPuzzle = puzzles[currentPuzzleIndex];
-    const response = await api.post(`/puzzles/${currentPuzzle._id}/skip`);
-    setSkipResult(response.data);
-    setSkipped(true);
+    try {
+      const currentPuzzle = puzzles[currentPuzzleIndex];
+      const response = await api.post(`/puzzles/${currentPuzzle._id}/skip`);
+      setSkipResult(response.data);
+      setSkipped(true);
+      setShowNext(true); // Show next button instead of auto-advancing
+      // Remove the automatic setTimeout - let user control when to proceed
+    } catch (error) {
+      console.error('Skip error:', error);
+      alert('Unable to skip puzzle right now');
+    }
+  };
+
+  const fetchLevelProgress = async () => {
+    try {
+      const response = await api.get('/progress');
+      setLevelProgress(response.data.progress);
+    } catch (error) {
+      console.error('Failed to fetch level progress:', error);
+    }
+  };
+
+  const isLevelUnlocked = (category, level) => {
+    if (level === 1) return true; // Level 1 is always unlocked
     
-    setTimeout(() => {
-      nextPuzzle();
-    }, 4000); // Show answer for 4 seconds
-  } catch (error) {
-    console.error('Skip error:', error);
-    alert('Unable to skip puzzle right now');
-  }
-};
+    // Check if previous level is completed
+    const previousLevel = levelProgress.find(p => 
+      p.category === category && p.level === level - 1
+    );
+    
+    return previousLevel && previousLevel.completed;
+  };
+
+  const getLevelInfo = (category, level) => {
+    const progress = levelProgress.find(p => 
+      p.category === category && p.level === level
+    );
+    
+    if (!progress) {
+      return { completed: false, puzzlesSolved: 0, totalPuzzles: 5 };
+    }
+    
+    return {
+      completed: progress.completed,
+      puzzlesSolved: progress.puzzlesSolved,
+      totalPuzzles: progress.totalPuzzles
+    };
+  };
 
   const styles = {
     container: {
@@ -474,73 +522,159 @@ function App() {
   }
 
   if (view === 'categories') {
-  return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-          <h2>Choose Category 🎯</h2>
-          <button 
-            style={styles.secondaryButton}
-            onClick={() => setView('home')}
-          >
-            ← Home
-          </button>
-        </div>
+    return (
+      <div style={styles.container}>
+        <div style={{
+          ...styles.card,
+          maxWidth: '800px' // Slightly wider for better level button layout
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <h2>Choose Category & Level 🎯</h2>
+            <button 
+              style={styles.secondaryButton}
+              onClick={() => setView('home')}
+            >
+              ← Home
+            </button>
+          </div>
 
-        <div style={{ display: 'grid', gap: '1.5rem' }}>
-          {categories.map(category => (
-            <div key={category.id} style={{
-              background: 'rgba(255,255,255,0.05)',
-              borderRadius: '12px',
-              padding: '1.5rem',
-              border: '1px solid rgba(255,255,255,0.1)'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
-                <span style={{ fontSize: '2rem' }}>{category.emoji}</span>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '1.3rem' }}>{category.name}</h3>
-                  <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', opacity: 0.7 }}>
-                    {category.description}
-                  </p>
-                </div>
-              </div>
+          <div style={{ 
+            display: 'grid', 
+            gap: '2rem',
+            justifyItems: 'center' // CENTER THE CATEGORIES
+          }}>
+            {categories.map(category => {
+              const categoryProgress = levelProgress.filter(p => p.category === category.id);
+              const completedLevels = categoryProgress.filter(p => p.completed).length;
               
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {[1, 2, 3].map(level => (
-                  <button
-                    key={level}
-                    style={{
-                      ...styles.secondaryButton,
-                      margin: '0.25rem',
-                      padding: '0.5rem 1rem',
-                      fontSize: '0.9rem',
-                      background: 'linear-gradient(45deg, #4f46e5, #7c3aed)'
-                    }}
-                    onClick={() => {
-                      setSelectedCategory(category.id);
-                      setSelectedLevel(level);
-                      fetchPuzzles(category.id, level);
-                      setView('puzzle');
-                    }}
-                  >
-                    Level {level}
-                    <span style={{ fontSize: '0.8rem', opacity: 0.8, marginLeft: '0.5rem' }}>
-                      ({level === 1 ? 'Easy' : level === 2 ? 'Medium' : 'Hard'})
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+              return (
+                <div key={category.id} style={{
+                  background: 'rgba(255,255,255,0.05)',
+                  borderRadius: '16px',
+                  padding: '2rem',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  width: '100%',
+                  maxWidth: '600px', // Constrain width for better centering
+                  textAlign: 'center' // CENTER CONTENT WITHIN EACH CATEGORY
+                }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', // CENTER THE HEADER
+                    gap: '1rem', 
+                    marginBottom: '1.5rem' 
+                  }}>
+                    <span style={{ fontSize: '3rem' }}>{category.emoji}</span>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: '1.5rem' }}>{category.name}</h3>
+                      <p style={{ margin: '0.5rem 0 0 0', fontSize: '1rem', opacity: 0.7 }}>
+                        {category.description}
+                      </p>
+                      <div style={{ fontSize: '0.9rem', opacity: 0.6, marginTop: '0.5rem' }}>
+                        {completedLevels}/3 levels completed
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div style={{ 
+                    display: 'flex', 
+                    gap: '1rem', 
+                    justifyContent: 'center', // CENTER THE LEVEL BUTTONS
+                    flexWrap: 'wrap' 
+                  }}>
+                    {[1, 2, 3].map(level => {
+                      const unlocked = isLevelUnlocked(category.id, level);
+                      const levelInfo = getLevelInfo(category.id, level);
+                      const difficultyText = level === 1 ? 'Easy' : level === 2 ? 'Medium' : 'Hard';
+                      
+                      return (
+                        <button
+                          key={level}
+                          style={{
+                            padding: '1rem 1.5rem',
+                            borderRadius: '12px',
+                            border: levelInfo.completed 
+                              ? '2px solid rgba(76, 175, 80, 0.7)' 
+                              : unlocked 
+                                ? '1px solid rgba(255,255,255,0.3)'
+                                : '1px solid rgba(255,255,255,0.1)',
+                            background: levelInfo.completed
+                              ? 'linear-gradient(45deg, #28a745, #20c997)'
+                              : unlocked 
+                                ? 'linear-gradient(45deg, #4f46e5, #7c3aed)'
+                                : 'rgba(128, 128, 128, 0.2)',
+                            color: unlocked ? 'white' : 'rgba(255,255,255,0.4)',
+                            fontSize: '1rem',
+                            cursor: unlocked ? 'pointer' : 'not-allowed',
+                            opacity: unlocked ? 1 : 0.5,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            minWidth: '120px'
+                          }}
+                          onClick={() => {
+                            if (unlocked) {
+                              setSelectedCategory(category.id);
+                              setSelectedLevel(level);
+                              fetchPuzzles(category.id, level);
+                              setView('puzzle');
+                            }
+                          }}
+                          disabled={!unlocked}
+                        >
+                          <div style={{ 
+                            fontSize: '1.2rem', 
+                            fontWeight: 'bold',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem'
+                          }}>
+                            Level {level}
+                            {levelInfo.completed && <span>✅</span>}
+                            {!unlocked && <span>🔒</span>}
+                          </div>
+                          <div style={{ fontSize: '0.85rem', opacity: 0.8 }}>
+                            {difficultyText}
+                          </div>
+                          {levelInfo.puzzlesSolved > 0 && (
+                            <div style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+                              {levelInfo.puzzlesSolved}/{levelInfo.totalPuzzles} solved
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  
+                  {!isLevelUnlocked(category.id, 2) && (
+                    <div style={{ 
+                      marginTop: '1rem', 
+                      fontSize: '0.85rem', 
+                      opacity: 0.6,
+                      fontStyle: 'italic'
+                    }}>
+                      Complete Level 1 to unlock Level 2! 🔓
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
 
-        <div style={{ textAlign: 'center', marginTop: '2rem', color: 'rgba(255,255,255,0.7)' }}>
-          Each level contains 5 challenging puzzles! 🚀
+          <div style={{ 
+            textAlign: 'center', 
+            marginTop: '2rem', 
+            color: 'rgba(255,255,255,0.7)',
+            fontSize: '0.95rem'
+          }}>
+            Each level contains 5 challenging puzzles! Complete them in order to unlock the next level. 🚀
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
+
 
   if (view === 'puzzle' && puzzles.length > 0) {
     const currentPuzzle = puzzles[currentPuzzleIndex];
@@ -607,13 +741,33 @@ function App() {
             
             {result && (
               <div style={{
-                padding: '1rem',
+                padding: '1.5rem',
                 borderRadius: '8px',
                 background: result.correct ? 'rgba(76, 175, 80, 0.2)' : 'rgba(244, 67, 54, 0.2)',
                 border: `1px solid ${result.correct ? 'rgba(76, 175, 80, 0.5)' : 'rgba(244, 67, 54, 0.5)'}`,
                 marginBottom: '1rem'
               }}>
-                {result.message}
+                <div style={{ fontWeight: 'bold', marginBottom: '0.5rem', fontSize: '1.1rem' }}>
+                  {result.correct ? '🎉 Correct!' : '❌ Not quite right'}
+                </div>
+                <div style={{ marginBottom: '1rem' }}>{result.message}</div>
+                
+                {/* ALWAYS SHOW EXPLANATION - whether correct or incorrect */}
+                {showExplanation && result.explanation && (
+                  <div style={{
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    padding: '1rem',
+                    borderRadius: '6px',
+                    borderLeft: '3px solid rgba(255, 193, 7, 0.7)',
+                    fontSize: '0.95rem',
+                    lineHeight: '1.4'
+                  }}>
+                    <div style={{ fontWeight: 'bold', marginBottom: '0.5rem', color: '#ffc107' }}>
+                      💡 Explanation:
+                    </div>
+                    {result.explanation}
+                  </div>
+                )}
               </div>
             )}
 
@@ -625,50 +779,51 @@ function App() {
               border: '1px solid rgba(255, 193, 7, 0.5)',
               marginBottom: '1rem'
             }}>
-              <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                Answer: {skipResult.answer}
+              <div style={{ fontWeight: 'bold', marginBottom: '0.5rem', fontSize: '1.1rem' }}>
+                💡 Answer: {skipResult.answer}
               </div>
-              <div style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
+              <div style={{ fontSize: '0.95rem', lineHeight: '1.5', marginBottom: '1rem' }}>
                 {skipResult.explanation}
               </div>
-              <div style={{ fontSize: '0.8rem', opacity: 0.8, marginTop: '0.5rem' }}>
-                Moving to next puzzle...
+              <div style={{ fontSize: '0.85rem', opacity: 0.8, fontStyle: 'italic' }}>
+                Don't worry - learning from explanations helps you improve! 📚
               </div>
             </div>
           )}
           </div>
 
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button 
-              style={styles.button}
-              onClick={submitAnswer}
-              disabled={loading || !answer.trim() || skipped}
-            >
-              {loading ? '⏳ Checking...' : 'Submit Answer ✓'}
-            </button>
-            
-            <button 
-              style={styles.secondaryButton}
-              onClick={getHint}
-              disabled={skipped}
-            >
-              Get Hint 💡
-            </button>
+            {!showNext && !skipped && (
+              <>
+                <button 
+                  style={styles.button}
+                  onClick={submitAnswer}
+                  disabled={loading || !answer.trim()}
+                >
+                  {loading ? '⏳ Checking...' : 'Submit Answer ✓'}
+                </button>
+                
+                <button 
+                  style={styles.secondaryButton}
+                  onClick={getHint}
+                >
+                  Get Hint 💡
+                </button>
 
-            {!result && !skipped && (
-              <button 
-                style={{
-                  ...styles.secondaryButton,
-                  background: 'rgba(244, 67, 54, 0.2)',
-                  border: '1px solid rgba(244, 67, 54, 0.5)'
-                }}
-                onClick={skipPuzzle}
-              >
-                Skip & See Answer ⏭️
-              </button>
+                <button 
+                  style={{
+                    ...styles.secondaryButton,
+                    background: 'rgba(244, 67, 54, 0.2)',
+                    border: '1px solid rgba(244, 67, 54, 0.5)'
+                  }}
+                  onClick={skipPuzzle}
+                >
+                  Skip & See Answer ⏭️
+                </button>
+              </>
             )}
 
-            {result && !result.correct && !skipped && (
+            {result && !result.correct && !skipped && !showNext && (
               <button 
                 style={styles.secondaryButton}
                 onClick={() => {
@@ -677,6 +832,20 @@ function App() {
                 }}
               >
                 Try Again 🔄
+              </button>
+            )}
+
+            {showNext && (
+              <button 
+                style={{
+                  ...styles.button,
+                  background: 'linear-gradient(45deg, #28a745, #20c997)',
+                  fontSize: '1.1rem',
+                  padding: '1rem 2rem'
+                }}
+                onClick={nextPuzzle}
+              >
+                {currentPuzzleIndex < puzzles.length - 1 ? 'Next Puzzle ➡️' : 'Complete Level 🏁'}
               </button>
             )}
           </div>
