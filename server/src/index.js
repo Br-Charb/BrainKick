@@ -116,23 +116,30 @@ const authenticateToken = async (req, res, next) => {
 };
 
 // Helper function to update streak (only for NEW puzzles)
-const updateStreak = async (userId) => {
+// Now accepts puzzleId and will NOT increment totals if puzzle was already solved by the user.
+const updateStreak = async (userId, puzzleId) => {
   try {
     const today = new Date().toDateString();
     
     if (mongoose.connection.readyState === 1) {
       // MongoDB is available
       let streak = await Streak.findOne({ userId });
-      
+
       if (!streak) {
-        streak = new Streak({ userId, totalPuzzlesSolved: 0 }); // Ensure it starts at 0
+        streak = new Streak({ userId, totalPuzzlesSolved: 0, solvedPuzzles: [] }); // Ensure it starts at 0
+      }
+
+      // If this puzzle was already marked solved, do NOT increment totals or modify streak.
+      if (puzzleId && Array.isArray(streak.solvedPuzzles) && streak.solvedPuzzles.includes(puzzleId)) {
+        console.log(`ℹ️ Puzzle ${puzzleId} already counted for user ${userId}; skipping streak/progress update.`);
+        return;
       }
 
       const lastActivity = streak.lastActivityDate?.toDateString();
-      
+
       if (lastActivity !== today) {
         const yesterday = new Date(Date.now() - 86400000).toDateString();
-        
+
         if (lastActivity === yesterday) {
           // Yesterday - continue streak
           streak.currentStreak++;
@@ -143,18 +150,23 @@ const updateStreak = async (userId) => {
           // First activity ever
           streak.currentStreak = 1;
         }
-        
+
         streak.longestStreak = Math.max(streak.longestStreak, streak.currentStreak);
         streak.lastActivityDate = new Date();
       }
-      
-      // ALWAYS increment total puzzles solved
+
+      // Increment total puzzles solved and record which puzzle was solved
       streak.totalPuzzlesSolved = (streak.totalPuzzlesSolved || 0) + 1;
+      if (puzzleId) {
+        streak.solvedPuzzles = streak.solvedPuzzles || [];
+        streak.solvedPuzzles.push(puzzleId);
+      }
+
       streak.updatedAt = new Date();
-      
+
       await streak.save();
       console.log(`✅ Stats updated for user ${userId}: ${streak.totalPuzzlesSolved} total, ${streak.currentStreak} streak`);
-      
+
     } else {
       // Use memory storage
       let streak = memoryStreaks.find(s => s.userId === userId);
@@ -164,17 +176,24 @@ const updateStreak = async (userId) => {
           currentStreak: 0,
           longestStreak: 0,
           lastActivityDate: null,
-          totalPuzzlesSolved: 0
+          totalPuzzlesSolved: 0,
+          solvedPuzzles: []
         };
         memoryStreaks.push(streak);
       }
-      
+
+      // If already solved, skip
+      if (puzzleId && Array.isArray(streak.solvedPuzzles) && streak.solvedPuzzles.includes(puzzleId)) {
+        console.log(`ℹ️ Memory: Puzzle ${puzzleId} already counted for user ${userId}; skipping.`);
+        return;
+      }
+
       const today = new Date().toDateString();
       const lastActivity = streak.lastActivityDate?.toDateString();
-      
+
       if (lastActivity !== today) {
         const yesterday = new Date(Date.now() - 86400000).toDateString();
-        
+
         if (lastActivity === yesterday) {
           streak.currentStreak++;
         } else if (lastActivity) {
@@ -182,13 +201,18 @@ const updateStreak = async (userId) => {
         } else {
           streak.currentStreak = 1;
         }
-        
+
         streak.longestStreak = Math.max(streak.longestStreak, streak.currentStreak);
         streak.lastActivityDate = new Date();
       }
-      
-      // ALWAYS increment total puzzles solved
+
+      // Increment total and mark solved
       streak.totalPuzzlesSolved++;
+      if (puzzleId) {
+        streak.solvedPuzzles = streak.solvedPuzzles || [];
+        streak.solvedPuzzles.push(puzzleId);
+      }
+
       console.log(`✅ Memory stats updated for user ${userId}: ${streak.totalPuzzlesSolved} total, ${streak.currentStreak} streak`);
     }
   } catch (error) {
@@ -196,7 +220,7 @@ const updateStreak = async (userId) => {
   }
 };
 
-const updateLevelProgress = async (userId, category, level) => {
+const updateLevelProgress = async (userId, category, level, puzzleId) => {
   try {
     if (mongoose.connection.readyState === 1) {
       // MongoDB is available
@@ -212,17 +236,28 @@ const updateLevelProgress = async (userId, category, level) => {
           completed: false
         });
       }
-      
-      progress.puzzlesSolved++;
-      
-      // Check if level is completed (all 5 puzzles solved)
-      if (progress.puzzlesSolved >= progress.totalPuzzles && !progress.completed) {
-        progress.completed = true;
-        progress.completedAt = new Date();
-        console.log(`🎉 Level completed: ${category} Level ${level} by user ${userId}`);
+      // Only increment puzzlesSolved if this particular puzzle hasn't been counted yet for this user.
+      // We'll use the Streak.solvedPuzzles list as the source of truth.
+      let alreadyCounted = false;
+      const streak = await Streak.findOne({ userId });
+      if (streak && Array.isArray(streak.solvedPuzzles) && puzzleId) {
+        alreadyCounted = streak.solvedPuzzles.includes(puzzleId);
       }
-      
-      await progress.save();
+
+      if (!alreadyCounted) {
+        progress.puzzlesSolved++;
+
+        // Check if level is completed (all 5 puzzles solved)
+        if (progress.puzzlesSolved >= progress.totalPuzzles && !progress.completed) {
+          progress.completed = true;
+          progress.completedAt = new Date();
+          console.log(`🎉 Level completed: ${category} Level ${level} by user ${userId}`);
+        }
+
+        await progress.save();
+      } else {
+        console.log(`ℹ️ Level progress already counted for puzzle ${puzzleId} for user ${userId}`);
+      }
       
     } else {
       // Memory storage
@@ -243,12 +278,20 @@ const updateLevelProgress = async (userId, category, level) => {
         memoryLevelProgress.push(progress);
       }
       
-      progress.puzzlesSolved++;
-      
-      if (progress.puzzlesSolved >= progress.totalPuzzles && !progress.completed) {
-        progress.completed = true;
-        progress.completedAt = new Date();
-        console.log(`🎉 Level completed: ${category} Level ${level} by user ${userId}`);
+      // Only count if not already in user's solved list
+      const streak = memoryStreaks.find(s => s.userId === userId);
+      const alreadyCounted = streak && Array.isArray(streak.solvedPuzzles) && puzzleId && streak.solvedPuzzles.includes(puzzleId);
+
+      if (!alreadyCounted) {
+        progress.puzzlesSolved++;
+
+        if (progress.puzzlesSolved >= progress.totalPuzzles && !progress.completed) {
+          progress.completed = true;
+          progress.completedAt = new Date();
+          console.log(`🎉 Level completed: ${category} Level ${level} by user ${userId}`);
+        }
+      } else {
+        console.log(`ℹ️ Memory: Level progress already counted for puzzle ${puzzleId} for user ${userId}`);
       }
     }
   } catch (error) {
@@ -1178,10 +1221,12 @@ app.post('/api/puzzles/:id/validate', authenticateToken, async (req, res) => {
     
     console.log(`✅ Answer "${answer}" for puzzle "${puzzle.title}" is ${correct ? 'correct' : 'wrong'}`);
     
-    // Update streak and level progress if correct
+    // Update level progress and streak if correct (update progress first, then mark puzzle solved)
     if (correct) {
-      await updateStreak(userId);
-      await updateLevelProgress(userId, puzzle.category, puzzle.level);
+      // First try to increment level progress (checks whether this puzzle was already counted)
+      await updateLevelProgress(userId, puzzle.category, puzzle.level, puzzleId);
+      // Then update streak and mark puzzle solved
+      await updateStreak(userId, puzzleId);
     }
     
     const responseMessage = correct 
@@ -1190,12 +1235,11 @@ app.post('/api/puzzles/:id/validate', authenticateToken, async (req, res) => {
         ? `Not quite right. ${aiResponse.split('INCORRECT')[1]?.trim() || 'Try again!'} 🤔`
         : 'Not quite right. Give it another try! 🤔';
     
-    // ALWAYS include explanation for learning (whether correct or incorrect)
+    // Include explanation only; do not return the correct answer here (skip route handles that)
     res.json({
       correct,
       message: responseMessage,
-      explanation: puzzle.explanation || `The answer is ${puzzle.correctAnswers[0]}. Keep practicing!`,
-      answer: puzzle.correctAnswers[0] // Include the correct answer for reference
+      explanation: puzzle.explanation || `The answer is ${puzzle.correctAnswers[0]}. Keep practicing!`
     });
   } catch (error) {
     console.error('Validation error:', error);

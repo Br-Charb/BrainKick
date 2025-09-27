@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import confetti from 'canvas-confetti';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 
 
 const api = axios.create({
@@ -31,7 +36,11 @@ function App() {
   const [skipResult, setSkipResult] = useState(null);
   const [showNext, setShowNext] = useState(false);
   const [levelProgress, setLevelProgress] = useState([]);
+  // Track locally-counted solved puzzle IDs to avoid double-counting in the UI
+  const [localSolved, setLocalSolved] = useState(new Set());
   const [showExplanation, setShowExplanation] = useState(false);
+  const [hintText, setHintText] = useState('');
+  const [showHint, setShowHint] = useState(false);
 
 
   // Auth form state
@@ -115,7 +124,10 @@ function App() {
       setSkipped(false);
       setSkipResult(null);
       setShowNext(false);
-      setShowExplanation(false); // ADD THIS LINE
+  setShowExplanation(false); // ADD THIS LINE
+  // hide any visible hint when loading new puzzles
+  setShowHint(false);
+  setHintText('');
     } catch (error) {
       console.error('Failed to fetch puzzles:', error);
       setPuzzles([]);
@@ -138,8 +150,10 @@ function App() {
         answer: answer.trim()
       });
 
-      setResult(response.data);
-      setShowExplanation(true);
+  setResult(response.data);
+  // Only show the full explanation when the answer is correct.
+  // If incorrect, show the brief message but hide the detailed explanation
+  setShowExplanation(!!response.data?.correct);
 
       if (response.data && response.data.correct) {
         // celebration!
@@ -150,7 +164,33 @@ function App() {
         });
 
         // refresh stats/progress and allow next puzzle
+        // Optimistically update level progress in the UI so the user sees immediate feedback
+        const currentPuzzle = puzzles[currentPuzzleIndex];
+        const puzzleId = currentPuzzle?._id;
+
+        if (puzzleId && !localSolved.has(puzzleId)) {
+          // mark locally solved
+          setLocalSolved(prev => {
+            const s = new Set(prev);
+            s.add(puzzleId);
+            return s;
+          });
+
+          // update levelProgress locally
+          setLevelProgress(prev => {
+            const updated = prev.map(item => {
+              if (item.category === selectedCategory && item.level === selectedLevel) {
+                const puzzlesSolved = Math.min((item.puzzlesSolved || 0) + 1, item.totalPuzzles || 5);
+                return { ...item, puzzlesSolved };
+              }
+              return item;
+            });
+            return updated;
+          });
+        }
+
         fetchStats();
+        // also refresh from server to ensure canonical state
         fetchLevelProgress();
         setShowNext(true);
       } else {
@@ -173,7 +213,10 @@ function App() {
         setSkipped(false);
         setSkipResult(null);
         setShowNext(false);
-        setShowExplanation(false); // ADD THIS LINE
+  setShowExplanation(false); // ADD THIS LINE
+  // hide hint when advancing
+  setShowHint(false);
+  setHintText('');
       } else {
         // Level complete — celebrate with big fireworks, then return to categories
         launchFireworks(3000);
@@ -187,12 +230,21 @@ function App() {
     };
 
   const getHint = async () => {
+    // Toggle hint visibility. If already visible, hide it.
+    if (showHint) {
+      setShowHint(false);
+      return;
+    }
+
     try {
       const currentPuzzle = puzzles[currentPuzzleIndex];
       const response = await api.post(`/puzzles/${currentPuzzle._id}/hint`);
-      alert('💡 ' + response.data.hint);
+      // store hint and render as markdown in the UI instead of alert
+      setHintText(response.data.hint || '💡 Think step by step!');
+      setShowHint(true);
     } catch (error) {
-      alert('Unable to get hint right now');
+      setHintText('Unable to get hint right now');
+      setShowHint(true);
     }
   };
 
@@ -207,9 +259,12 @@ function App() {
     try {
       const currentPuzzle = puzzles[currentPuzzleIndex];
       const response = await api.post(`/puzzles/${currentPuzzle._id}/skip`);
-      setSkipResult(response.data);
-      setSkipped(true);
-      setShowNext(true); // Show next button instead of auto-advancing
+  // hide hint when revealing the answer
+  setShowHint(false);
+  setHintText('');
+  setSkipResult(response.data);
+  setSkipped(true);
+  setShowNext(true); // Show next button instead of auto-advancing
       // Remove the automatic setTimeout - let user control when to proceed
     } catch (error) {
       console.error('Skip error:', error);
@@ -480,7 +535,7 @@ function App() {
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
             <button 
               style={styles.button}
-              onClick={() => setView('categories')}
+              onClick={() => { fetchLevelProgress(); setView('categories'); }}
             >
               Start Playing 🎯
             </button>
@@ -504,7 +559,7 @@ function App() {
             <h2>Your Stats 📊</h2>
             <button 
               style={styles.secondaryButton}
-              onClick={() => setView('home')}
+              onClick={() => { fetchLevelProgress(); setView('home'); }}
             >
               ← Back
             </button>
@@ -737,6 +792,7 @@ function App() {
 
   if (view === 'puzzle' && puzzles.length > 0) {
     const currentPuzzle = puzzles[currentPuzzleIndex];
+    const currentLevelInfo = getLevelInfo(selectedCategory, selectedLevel);
     
     return (
       <div style={styles.container}>
@@ -746,13 +802,16 @@ function App() {
               <h3 style={{ margin: 0, color: 'rgba(255,255,255,0.8)' }}>
                 {categories.find(c => c.id === selectedCategory)?.emoji} {categories.find(c => c.id === selectedCategory)?.name} - Level {selectedLevel}
               </h3>
-              <div style={{ fontSize: '0.9rem', opacity: 0.6 }}>
-                Puzzle {currentPuzzleIndex + 1} of {puzzles.length}
+              <div style={{ fontSize: '0.9rem', opacity: 0.6, display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                <div>Puzzle {currentPuzzleIndex + 1} of {puzzles.length}</div>
+                <div style={{ background: 'rgba(255,255,255,0.03)', padding: '0.25rem 0.6rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  ✅ Level progress: {currentLevelInfo.puzzlesSolved}/{currentLevelInfo.totalPuzzles}
+                </div>
               </div>
             </div>
             <button 
               style={styles.secondaryButton}
-              onClick={() => setView('categories')}
+              onClick={() => { fetchLevelProgress(); setView('categories'); }}
             >
               ← Back
             </button>
@@ -811,7 +870,7 @@ function App() {
                 </div>
                 <div style={{ marginBottom: '1rem' }}>{result.message}</div>
                 
-                {/* ALWAYS SHOW EXPLANATION - whether correct or incorrect */}
+                {/* Show explanation only when allowed (correct answer) */}
                 {showExplanation && result.explanation && (
                   <div style={{
                     background: 'rgba(255, 255, 255, 0.1)',
@@ -824,7 +883,9 @@ function App() {
                     <div style={{ fontWeight: 'bold', marginBottom: '0.5rem', color: '#ffc107' }}>
                       💡 Explanation:
                     </div>
-                    {result.explanation}
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {result.explanation}
+                    </ReactMarkdown>
                   </div>
                 )}
               </div>
@@ -839,14 +900,37 @@ function App() {
               marginBottom: '1rem'
             }}>
               <div style={{ fontWeight: 'bold', marginBottom: '0.5rem', fontSize: '1.1rem' }}>
-                💡 Answer: {skipResult.answer}
+                💡 Answer:
+              </div>
+              <div style={{ marginBottom: '0.75rem' }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                  {skipResult.answer}
+                </ReactMarkdown>
               </div>
               <div style={{ fontSize: '0.95rem', lineHeight: '1.5', marginBottom: '1rem' }}>
-                {skipResult.explanation}
+                <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                  {skipResult.explanation}
+                </ReactMarkdown>
               </div>
               <div style={{ fontSize: '0.85rem', opacity: 0.8, fontStyle: 'italic' }}>
                 Don't worry - learning from explanations helps you improve! 📚
               </div>
+            </div>
+          )}
+
+          {/* Render hint (if requested) as Markdown */}
+          {showHint && hintText && (
+            <div style={{
+              padding: '1rem',
+              borderRadius: '8px',
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              marginBottom: '1rem'
+            }}>
+              <div style={{ fontWeight: 'bold', marginBottom: '0.5rem', color: '#ffc107' }}>💡 Hint:</div>
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                {hintText}
+              </ReactMarkdown>
             </div>
           )}
           </div>
@@ -882,17 +966,7 @@ function App() {
               </>
             )}
 
-            {result && !result.correct && !skipped && !showNext && (
-              <button 
-                style={styles.secondaryButton}
-                onClick={() => {
-                  setAnswer('');
-                  setResult(null);
-                }}
-              >
-                Try Again 🔄
-              </button>
-            )}
+            {/* Try Again button removed per UX change */}
 
             {showNext && (
               <button 
