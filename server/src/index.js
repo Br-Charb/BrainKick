@@ -6,9 +6,12 @@ const jwt = require('jsonwebtoken');
 const { OpenAI } = require('openai');
 require('dotenv').config();
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+} else {
+  console.warn('⚠️ OPENAI_API_KEY is not set. OpenAI features will be disabled.');
+}
 
 console.log('🚀 Starting BrainKick server...');
 
