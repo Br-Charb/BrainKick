@@ -78,6 +78,8 @@ const streakSchema = new mongoose.Schema({
   lastActivityDate: { type: Date },
   totalPuzzlesSolved: { type: Number, default: 0 },
   solvedPuzzles: [{ type: String }], // Track which puzzles were solved to avoid duplicates
+  // Keep a small history of solves with timestamps so we can build weekly charts
+  solvedHistory: [{ puzzleId: String, solvedAt: Date }],
   updatedAt: { type: Date, default: Date.now }
 });
 
@@ -99,7 +101,7 @@ const authenticateToken = async (req, res, next) => {
     // This keeps the production behavior (require token when DB is present).
     if (mongoose.connection.readyState !== 1) {
       // Use a simple guest id for in-memory flows
-      req.userId = 0;
+  req.userId = '0';
       return next();
     }
 
@@ -108,7 +110,8 @@ const authenticateToken = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.userId = decoded.userId;
+  // Normalize to string so in-memory storage comparisons are consistent
+  req.userId = String(decoded.userId);
     next();
   } catch (error) {
     return res.status(403).json({ error: 'Invalid token' });
@@ -159,7 +162,9 @@ const updateStreak = async (userId, puzzleId) => {
       streak.totalPuzzlesSolved = (streak.totalPuzzlesSolved || 0) + 1;
       if (puzzleId) {
         streak.solvedPuzzles = streak.solvedPuzzles || [];
-        streak.solvedPuzzles.push(puzzleId);
+  streak.solvedPuzzles.push(puzzleId);
+  streak.solvedHistory = streak.solvedHistory || [];
+  streak.solvedHistory.push({ puzzleId, solvedAt: new Date() });
       }
 
       streak.updatedAt = new Date();
@@ -169,7 +174,7 @@ const updateStreak = async (userId, puzzleId) => {
 
     } else {
       // Use memory storage
-      let streak = memoryStreaks.find(s => s.userId === userId);
+  let streak = memoryStreaks.find(s => String(s.userId) === String(userId));
       if (!streak) {
         streak = {
           userId,
@@ -210,7 +215,9 @@ const updateStreak = async (userId, puzzleId) => {
       streak.totalPuzzlesSolved++;
       if (puzzleId) {
         streak.solvedPuzzles = streak.solvedPuzzles || [];
-        streak.solvedPuzzles.push(puzzleId);
+  streak.solvedPuzzles.push(puzzleId);
+  streak.solvedHistory = streak.solvedHistory || [];
+  streak.solvedHistory.push({ puzzleId, solvedAt: new Date() });
       }
 
       console.log(`✅ Memory stats updated for user ${userId}: ${streak.totalPuzzlesSolved} total, ${streak.currentStreak} streak`);
@@ -262,7 +269,7 @@ const updateLevelProgress = async (userId, category, level, puzzleId) => {
     } else {
       // Memory storage
       let progress = memoryLevelProgress.find(p => 
-        p.userId === userId && p.category === category && p.level === level
+        String(p.userId) === String(userId) && p.category === category && p.level === level
       );
       
       if (!progress) {
@@ -279,8 +286,8 @@ const updateLevelProgress = async (userId, category, level, puzzleId) => {
       }
       
       // Only count if not already in user's solved list
-      const streak = memoryStreaks.find(s => s.userId === userId);
-      const alreadyCounted = streak && Array.isArray(streak.solvedPuzzles) && puzzleId && streak.solvedPuzzles.includes(puzzleId);
+  const streak = memoryStreaks.find(s => String(s.userId) === String(userId));
+  const alreadyCounted = streak && Array.isArray(streak.solvedPuzzles) && puzzleId && streak.solvedPuzzles.includes(puzzleId);
 
       if (!alreadyCounted) {
         progress.puzzlesSolved++;
@@ -1036,11 +1043,11 @@ app.post('/api/auth/register', async (req, res) => {
       const streak = new Streak({ userId: user._id, solvedPuzzles: [] });
       await streak.save();
 
-  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+      const token = jwt.sign({ userId: String(user._id) }, JWT_SECRET, { expiresIn: '7d' });
       res.status(201).json({
         message: 'Welcome to BrainKick!',
         token,
-        user: { id: user._id, username: user.username, email: user.email }
+        user: { id: String(user._id), username: user.username, email: user.email }
       });
     } else {
       const existingUser = memoryUsers.find(u => u.email === email || u.username === username);
@@ -1052,7 +1059,8 @@ app.post('/api/auth/register', async (req, res) => {
 
       const hashedPassword = await bcrypt.hash(password, 10);
       const user = {
-        _id: userIdCounter++,
+        // store in-memory ids as strings for consistency with JWT and Mongo ids
+        _id: String(userIdCounter++),
         username,
         email,
         password: hashedPassword,
@@ -1060,11 +1068,22 @@ app.post('/api/auth/register', async (req, res) => {
       };
       memoryUsers.push(user);
 
-  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+      // Initialize an in-memory streak record for this user so data is per-account
+      memoryStreaks.push({
+        userId: String(user._id),
+        currentStreak: 0,
+        longestStreak: 0,
+        lastActivityDate: null,
+        totalPuzzlesSolved: 0,
+        solvedPuzzles: [],
+        solvedHistory: []
+      });
+
+  const token = jwt.sign({ userId: String(user._id) }, JWT_SECRET, { expiresIn: '7d' });
       res.status(201).json({
         message: 'Welcome to BrainKick!',
         token,
-        user: { id: user._id, username: user.username, email: user.email }
+        user: { id: String(user._id), username: user.username, email: user.email }
       });
     }
   } catch (error) {
@@ -1088,11 +1107,11 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
-  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+      const token = jwt.sign({ userId: String(user._id) }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
         message: 'Welcome back! 🎯',
         token,
-        user: { id: user._id, username: user.username, email: user.email }
+        user: { id: String(user._id), username: user.username, email: user.email }
       });
     } else {
       const user = memoryUsers.find(u => u.email === email);
@@ -1100,11 +1119,26 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
-  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+      const token = jwt.sign({ userId: String(user._id) }, JWT_SECRET, { expiresIn: '7d' });
+
+      // Ensure this in-memory user has a streak record initialized
+      let streak = memoryStreaks.find(s => String(s.userId) === String(user._id));
+      if (!streak) {
+        memoryStreaks.push({
+          userId: String(user._id),
+          currentStreak: 0,
+          longestStreak: 0,
+          lastActivityDate: null,
+          totalPuzzlesSolved: 0,
+          solvedPuzzles: [],
+          solvedHistory: []
+        });
+      }
+
       res.json({
         message: 'Welcome back! 🎯',
         token,
-        user: { id: user._id, username: user.username, email: user.email }
+        user: { id: String(user._id), username: user.username, email: user.email }
       });
     }
   } catch (error) {
@@ -1371,31 +1405,52 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
         currentStreak: 0, 
         longestStreak: 0,
         totalPuzzlesSolved: 0,
-        solvedPuzzles: []
+        solvedPuzzles: [],
+        solvedHistory: []
       };
-      
+      // Build weekly counts for last 7 days by weekday (Mon..Sun)
+      const weeklyCounts = [0,0,0,0,0,0,0]; // Mon=0 ... Sun=6
+      (streak.solvedHistory || []).forEach(entry => {
+        const d = new Date(entry.solvedAt);
+        // JS getDay: 0=Sun,1=Mon..6=Sat => convert to Mon=0..Sun=6
+        const jsDay = d.getDay();
+        const idx = jsDay === 0 ? 6 : jsDay - 1;
+        weeklyCounts[idx]++;
+      });
+
       res.json({
         currentStreak: streak.currentStreak,
         longestStreak: streak.longestStreak,
         totalPuzzlesSolved: streak.totalPuzzlesSolved,
         lastActivityDate: streak.lastActivityDate,
-        uniquePuzzlesSolved: streak.solvedPuzzles?.length || 0
+        uniquePuzzlesSolved: streak.solvedPuzzles?.length || 0,
+        weeklyCounts
       });
     } else {
-      const streak = memoryStreaks.find(s => s.userId === userId) || { 
+      const streak = memoryStreaks.find(s => String(s.userId) === String(userId)) || { 
         currentStreak: 0, 
         longestStreak: 0,
         totalPuzzlesSolved: 0,
         lastActivityDate: null,
-        solvedPuzzles: []
+        solvedPuzzles: [],
+        solvedHistory: []
       };
-      
+
+      const weeklyCounts = [0,0,0,0,0,0,0];
+      (streak.solvedHistory || []).forEach(entry => {
+        const d = new Date(entry.solvedAt);
+        const jsDay = d.getDay();
+        const idx = jsDay === 0 ? 6 : jsDay - 1;
+        weeklyCounts[idx]++;
+      });
+
       res.json({
         currentStreak: streak.currentStreak,
         longestStreak: streak.longestStreak,
         totalPuzzlesSolved: streak.totalPuzzlesSolved,
         lastActivityDate: streak.lastActivityDate,
-        uniquePuzzlesSolved: streak.solvedPuzzles?.length || 0
+        uniquePuzzlesSolved: streak.solvedPuzzles?.length || 0,
+        weeklyCounts
       });
     }
   } catch (error) {
@@ -1414,7 +1469,7 @@ app.get('/api/progress', authenticateToken, async (req, res) => {
       res.json({ progress });
     } else {
       // Memory storage
-      const progress = memoryLevelProgress.filter(p => p.userId === userId);
+  const progress = memoryLevelProgress.filter(p => String(p.userId) === String(userId));
       res.json({ progress });
     }
   } catch (error) {

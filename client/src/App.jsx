@@ -73,11 +73,19 @@ function App() {
   const fetchStats = async () => {
     try {
       const response = await api.get('/stats');
-      setStats(response.data);
+      // Pull weeklyCounts out if available
+      const { weeklyCounts, ...rest } = response.data;
+      setStats(rest);
+      if (weeklyCounts) {
+        setWeeklyCounts(weeklyCounts);
+      }
     } catch (error) {
       console.error('Failed to fetch stats:', error);
     }
   };
+
+  // weeklyCounts: array length 7 for Mon..Sun
+  const [weeklyCounts, setWeeklyCounts] = useState([0,0,0,0,0,0,0]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -618,6 +626,47 @@ function App() {
                       ? "Amazing dedication! You're on fire! 🔥"
                       : "Incredible! You're a brain training champion! 🏆"
                 }
+              </div>
+            </div>
+
+            {/* Weekly solves bar chart (largest = 100% height) */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '1.25rem', borderRadius: '10px', display: 'flex', justifyContent: 'center' }}>
+              <div style={{ width: '100%', maxWidth: '720px' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '0.75rem', textAlign: 'center' }}>Solved This Week</div>
+                <div style={{ display: 'flex', gap: '18px', alignItems: 'end', height: '260px', padding: '8px', justifyContent: 'center' }}>
+                  {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d, i) => {
+                    const value = weeklyCounts[i] || 0;
+                    const rawMax = Math.max(1, ...weeklyCounts);
+                    const chartHeightPx = 200; // px available for bars inside the container
+
+                    // Pixel height proportional to rawMax; when rawMax === value, height = chartHeightPx
+                    let pixelHeight = rawMax > 0 ? Math.round((value / rawMax) * chartHeightPx) : 0;
+                    // Make small non-zero values more visible
+                    if (value > 0) pixelHeight = Math.max(28, Math.min(chartHeightPx, pixelHeight));
+
+                    return (
+                      <div key={d} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '72px' }}>
+                        <div style={{
+                          width: '100%',
+                          height: `${pixelHeight}px`,
+                          background: value > 0 ? 'linear-gradient(180deg,#4f46e5,#7c3aed)' : 'rgba(255,255,255,0.06)',
+                          borderRadius: '10px',
+                          transition: 'height 300ms ease',
+                          display: 'flex',
+                          alignItems: 'flex-end',
+                          justifyContent: 'center',
+                          color: 'white',
+                          fontSize: '1rem',
+                          paddingBottom: '8px',
+                          boxShadow: value > 0 ? '0 6px 20px rgba(79,70,229,0.14)' : 'none'
+                        }} title={`${value} solved`}>
+                          {value > 0 ? <span style={{ fontWeight: 800 }}>{value}</span> : null}
+                        </div>
+                        <div style={{ marginTop: '12px', fontSize: '0.95rem' }}>{d}</div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
