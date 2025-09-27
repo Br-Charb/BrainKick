@@ -494,7 +494,7 @@ const puzzles = {
         category: 'logic',
         level: 1,
         position: 1,
-        correctAnswers: ['carrot', 'Carrot'],
+        correctAnswers: ['carrot'],
         hint: 'Think about categories. Three of these grow on trees or plants above ground... 🌳',
         explanation: 'The answer is **Carrot**. Apple, Banana, and Orange are all fruits that typically grow above ground, while a carrot is a vegetable that grows underground (it\'s a root).'
       },
@@ -1038,7 +1038,7 @@ app.post('/api/auth/register', async (req, res) => {
 
   const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
       res.status(201).json({
-        message: 'Welcome to BrainKick! 🧠⚡',
+        message: 'Welcome to BrainKick!',
         token,
         user: { id: user._id, username: user.username, email: user.email }
       });
@@ -1062,7 +1062,7 @@ app.post('/api/auth/register', async (req, res) => {
 
   const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
       res.status(201).json({
-        message: 'Welcome to BrainKick! 🧠⚡',
+        message: 'Welcome to BrainKick!',
         token,
         user: { id: user._id, username: user.username, email: user.email }
       });
@@ -1233,7 +1233,7 @@ app.post('/api/puzzles/:id/validate', authenticateToken, async (req, res) => {
       ? 'Excellent work! 🎉' 
       : aiResponse 
         ? `Not quite right. ${aiResponse.split('INCORRECT')[1]?.trim() || 'Try again!'} 🤔`
-        : 'Not quite right. Give it another try! 🤔';
+        : 'Not quite right. Give it another try!';
     
     // Include explanation only; do not return the correct answer here (skip route handles that)
     res.json({

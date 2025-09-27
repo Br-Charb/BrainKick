@@ -4,7 +4,7 @@ A gamified brain-training platform with AI-powered puzzle validation, hints, and
 
 ## Features
 - 4 puzzle categories: Logic, Math, Wordplay, Pattern Recognition  
-- Progressive levels (3 puzzles per level)
+- Progressive levels (5 puzzles per level)
 - Daily streak tracking
 - AI-powered answer validation (tolerant to spelling/phrasing)
 - Smart hints and explanations via OpenAI GPT
@@ -68,7 +68,7 @@ VITE_API_BASE_URL=http://localhost:4000/api
 
 ## Deployment
 - Backend: Deploy to Railway, Render, or Heroku
-- Frontend: Deploy to Vercel or Netlify
+- Frontend: Deploy to Vercel
 - Database: MongoDB Atlas (free tier available)
 
 ## Contributing

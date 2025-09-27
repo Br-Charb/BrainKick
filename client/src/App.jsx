@@ -213,7 +213,7 @@ function App() {
         setSkipped(false);
         setSkipResult(null);
         setShowNext(false);
-  setShowExplanation(false); // ADD THIS LINE
+  setShowExplanation(false); 
   // hide hint when advancing
   setShowHint(false);
   setHintText('');
@@ -913,7 +913,7 @@ function App() {
                 </ReactMarkdown>
               </div>
               <div style={{ fontSize: '0.85rem', opacity: 0.8, fontStyle: 'italic' }}>
-                Don't worry - learning from explanations helps you improve! 📚
+                Don't worry - learning from explanations helps you improve! 
               </div>
             </div>
           )}
@@ -999,7 +999,7 @@ function App() {
             </>
           ) : (
             <>
-              <h2>Something went wrong 😕</h2>
+              <h2>Something went wrong...</h2>
               <button 
                 style={styles.button}
                 onClick={() => setView('home')}
