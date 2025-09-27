@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import confetti from 'canvas-confetti';
+
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api'
@@ -124,47 +126,65 @@ function App() {
 
   const submitAnswer = async () => {
     if (!answer.trim()) return;
-    
+
     setLoading(true);
+    setResult(null);
+    setShowExplanation(false);
+    setShowNext(false);
+
     try {
       const currentPuzzle = puzzles[currentPuzzleIndex];
       const response = await api.post(`/puzzles/${currentPuzzle._id}/validate`, {
         answer: answer.trim()
       });
+
       setResult(response.data);
-      setShowExplanation(true); // Always show explanation
-      
-      if (response.data.correct) {
-        fetchStats(); // Refresh stats immediately
-        fetchLevelProgress(); // Refresh level progress
-        setShowNext(true); // Show next button
+      setShowExplanation(true);
+
+      if (response.data && response.data.correct) {
+        // celebration!
+        confetti({
+          particleCount: 150,
+          spread: 70,
+          origin: { y: 0.6 }
+        });
+
+        // refresh stats/progress and allow next puzzle
+        fetchStats();
+        fetchLevelProgress();
+        setShowNext(true);
       } else {
-        setShowNext(false); // Hide next button for wrong answers
+        setShowNext(false);
       }
     } catch (error) {
       setResult({ correct: false, message: 'Error validating answer' });
-      setShowNext(false);
       setShowExplanation(false);
+      setShowNext(false);
     } finally {
       setLoading(false);
     }
   };
 
   const nextPuzzle = () => {
-    if (currentPuzzleIndex < puzzles.length - 1) {
-      setCurrentPuzzleIndex(currentPuzzleIndex + 1);
-      setAnswer('');
-      setResult(null);
-      setSkipped(false);
-      setSkipResult(null);
-      setShowNext(false);
-      setShowExplanation(false); // ADD THIS LINE
-    } else {
-      alert('🎉 Level completed! Great job!');
-      fetchLevelProgress(); // Refresh progress before going back
-      setView('categories');
-    }
-  };
+      if (currentPuzzleIndex < puzzles.length - 1) {
+        setCurrentPuzzleIndex(currentPuzzleIndex + 1);
+        setAnswer('');
+        setResult(null);
+        setSkipped(false);
+        setSkipResult(null);
+        setShowNext(false);
+        setShowExplanation(false); // ADD THIS LINE
+      } else {
+        // Level complete — celebrate with big fireworks, then return to categories
+        launchFireworks(3000);
+
+        // Refresh progress after the fireworks have started, then navigate back
+        setTimeout(() => {
+          fetchLevelProgress(); // Refresh progress before going back
+          setView('categories');
+        }, 1800);
+      }
+    };
 
   const getHint = async () => {
     try {
@@ -232,6 +252,45 @@ function App() {
       totalPuzzles: progress.totalPuzzles
     };
   };
+
+  const launchFireworks = (duration = 2500) => {
+    const colors = ['#bb0000','#ffffff','#00bbff','#ffcc00','#8e44ad','#28a745'];
+    const end = Date.now() + duration;
+
+    const interval = setInterval(() => {
+      confetti({
+        particleCount: 60,
+        spread: 160,
+        startVelocity: 30,
+        ticks: 100,
+        gravity: 0.8,
+        colors,
+        origin: { x: Math.random(), y: Math.random() * 0.6 }
+      });
+
+      // left & right directional bursts for a fireworks feel
+      confetti({
+          particleCount: 40,
+          angle: 60,
+          spread: 55,
+          startVelocity: 45,
+          colors,
+          origin: { x: 0.1 + Math.random() * 0.2, y: 0.7 }
+        });
+        confetti({
+          particleCount: 40,
+          angle: 120,
+          spread: 55,
+          startVelocity: 45,
+          colors,
+          origin: { x: 0.8 + Math.random() * 0.2, y: 0.7 }
+        });
+
+        if (Date.now() > end) {
+          clearInterval(interval);
+        }
+      }, 250);
+    };
 
   const styles = {
     container: {
