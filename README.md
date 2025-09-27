@@ -1,4 +1,4 @@
-# BrainKick 🧠⚡
+# BrainKick 
 
 A gamified brain-training platform with AI-powered puzzle validation, hints, and explanations.
 
