@@ -76,5 +76,3 @@ VITE_API_BASE_URL=http://localhost:4000/api
 2. Create a feature branch
 3. Make your changes
 4. Submit a pull request
-
-Built with ❤️ for brain training enthusiasts!
