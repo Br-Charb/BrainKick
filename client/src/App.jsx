@@ -5,8 +5,18 @@ const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api'
 });
 
+// Add auth token to requests
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('brainkick_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 function App() {
-  const [view, setView] = useState('home');
+  const [user, setUser] = useState(null);
+  const [view, setView] = useState('login');
   const [selectedCategory, setSelectedCategory] = useState('logic');
   const [selectedLevel, setSelectedLevel] = useState(1);
   const [puzzles, setPuzzles] = useState([]);
@@ -14,11 +24,74 @@ function App() {
   const [answer, setAnswer] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [stats, setStats] = useState({ currentStreak: 0, totalPuzzlesSolved: 0, longestStreak: 0 });
+
+  // Auth form state
+  const [isLogin, setIsLogin] = useState(true);
+  const [authForm, setAuthForm] = useState({
+    username: '',
+    email: '',
+    password: ''
+  });
+  const [authError, setAuthError] = useState('');
+
+  useEffect(() => {
+    const token = localStorage.getItem('brainkick_token');
+    const userData = localStorage.getItem('brainkick_user');
+    if (token && userData) {
+      setUser(JSON.parse(userData));
+      setView('home');
+      fetchStats();
+    }
+  }, []);
 
   const categories = [
     { id: 'logic', name: 'Logic', emoji: '🧩' },
     { id: 'math', name: 'Math', emoji: '🔢' }
   ];
+
+  const fetchStats = async () => {
+    try {
+      const response = await api.get('/stats');
+      setStats(response.data);
+    } catch (error) {
+      console.error('Failed to fetch stats:', error);
+    }
+  };
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setAuthError('');
+
+    try {
+      const endpoint = isLogin ? '/auth/login' : '/auth/register';
+      const payload = isLogin 
+        ? { email: authForm.email, password: authForm.password }
+        : authForm;
+
+      const response = await api.post(endpoint, payload);
+      const { token, user: userData } = response.data;
+
+      localStorage.setItem('brainkick_token', token);
+      localStorage.setItem('brainkick_user', JSON.stringify(userData));
+      setUser(userData);
+      setView('home');
+      fetchStats();
+    } catch (error) {
+      setAuthError(error.response?.data?.error || 'Authentication failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('brainkick_token');
+    localStorage.removeItem('brainkick_user');
+    setUser(null);
+    setView('login');
+    setStats({ currentStreak: 0, totalPuzzlesSolved: 0, longestStreak: 0 });
+  };
 
   const fetchPuzzles = async (category, level) => {
     try {
@@ -47,8 +120,8 @@ function App() {
       });
       setResult(response.data);
       
-      // If correct, advance after 2 seconds
       if (response.data.correct) {
+        fetchStats();
         setTimeout(() => {
           nextPuzzle();
         }, 2000);
@@ -62,12 +135,10 @@ function App() {
 
   const nextPuzzle = () => {
     if (currentPuzzleIndex < puzzles.length - 1) {
-      // Go to next puzzle
       setCurrentPuzzleIndex(currentPuzzleIndex + 1);
       setAnswer('');
       setResult(null);
     } else {
-      // Completed all puzzles in this level
       alert('🎉 Level completed! Great job!');
       setView('categories');
     }
@@ -138,77 +209,155 @@ function App() {
       color: 'white',
       borderRadius: '8px',
       fontSize: '1rem',
-      marginBottom: '1rem'
+      marginBottom: '1rem',
+      boxSizing: 'border-box'
+    },
+    streakBadge: {
+      background: 'rgba(255, 193, 7, 0.2)',
+      border: '1px solid rgba(255, 193, 7, 0.5)',
+      borderRadius: '20px',
+      padding: '0.5rem 1rem',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '0.5rem',
+      fontSize: '0.9rem'
     }
   };
 
-  // Home screen
-  if (view === 'home') {
+  // Main render logic
+  if (!user) {
     return (
       <div style={styles.container}>
         <div style={styles.card}>
           <h1 style={{ textAlign: 'center', marginBottom: '2rem' }}>
             🧠 BrainKick
           </h1>
-          <p style={{ textAlign: 'center', marginBottom: '2rem', opacity: 0.8 }}>
-            Challenge your mind with brain teasers across different categories!
-          </p>
-          <div style={{ textAlign: 'center' }}>
+          <h2 style={{ textAlign: 'center', marginBottom: '2rem' }}>
+            {isLogin ? 'Welcome Back!' : 'Join BrainKick!'}
+          </h2>
+
+          <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column' }}>
+            {!isLogin && (
+              <input
+                style={styles.input}
+                type="text"
+                placeholder="Username"
+                value={authForm.username}
+                onChange={(e) => setAuthForm(prev => ({ ...prev, username: e.target.value }))}
+                required={!isLogin}
+              />
+            )}
+            
+            <input
+              style={styles.input}
+              type="email"
+              placeholder="Email"
+              value={authForm.email}
+              onChange={(e) => setAuthForm(prev => ({ ...prev, email: e.target.value }))}
+              required
+            />
+            
+            <input
+              style={styles.input}
+              type="password"
+              placeholder="Password (min 6 characters)"
+              value={authForm.password}
+              onChange={(e) => setAuthForm(prev => ({ ...prev, password: e.target.value }))}
+              required
+              minLength="6"
+            />
+
+            {authError && (
+              <div style={{ color: '#ff6b6b', textAlign: 'center', marginBottom: '1rem' }}>
+                {authError}
+              </div>
+            )}
+
+            <button 
+              type="submit" 
+              disabled={loading}
+              style={styles.button}
+            >
+              {loading ? '⏳ Processing...' : (isLogin ? 'Login' : 'Sign Up')}
+            </button>
+          </form>
+
+          <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setIsLogin(!isLogin);
+                setAuthError('');
+                setAuthForm({ username: '', email: '', password: '' });
+              }}
+              style={{ background: 'none', border: 'none', color: 'white', textDecoration: 'underline', cursor: 'pointer' }}
+            >
+              {isLogin ? "Don't have an account? Sign up" : "Already have an account? Login"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'home') {
+    return (
+      <div style={styles.container}>
+        <div style={styles.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Welcome, {user.username}! 🎯</h2>
+              <div style={styles.streakBadge}>
+                🔥 {stats.currentStreak} day streak
+              </div>
+            </div>
+            <button 
+              style={styles.secondaryButton}
+              onClick={logout}
+            >
+              Logout
+            </button>
+          </div>
+
+          <h1 style={{ textAlign: 'center', marginBottom: '1rem' }}>
+            🧠 BrainKick
+          </h1>
+          
+          <div style={{ 
+            background: 'rgba(255,255,255,0.05)', 
+            padding: '1rem', 
+            borderRadius: '8px', 
+            marginBottom: '2rem',
+            textAlign: 'center'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-around', textAlign: 'center' }}>
+              <div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stats.totalPuzzlesSolved}</div>
+                <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Puzzles Solved</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stats.currentStreak}</div>
+                <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Current Streak</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{stats.longestStreak}</div>
+                <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Best Streak</div>
+              </div>
+            </div>
+          </div>
+          
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
             <button 
               style={styles.button}
               onClick={() => setView('categories')}
             >
               Start Playing 🎯
             </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Category selection
-  if (view === 'categories') {
-    return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <h2 style={{ textAlign: 'center', marginBottom: '2rem' }}>
-            Choose Your Challenge 🎯
-          </h2>
-          
-          <div style={{ display: 'grid', gap: '1rem' }}>
-            {categories.map((category) => (
-              <div 
-                key={category.id}
-                style={{
-                  ...styles.secondaryButton,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '1.5rem',
-                  cursor: 'pointer'
-                }}
-                onClick={() => startCategory(category.id)}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <span style={{ fontSize: '2rem' }}>{category.emoji}</span>
-                  <div>
-                    <h3 style={{ margin: 0 }}>{category.name}</h3>
-                    <p style={{ margin: 0, opacity: 0.7, fontSize: '0.9rem' }}>
-                      3 puzzles per level
-                    </p>
-                  </div>
-                </div>
-                <span style={{ opacity: 0.7 }}>→</span>
-              </div>
-            ))}
-          </div>
-          
-          <div style={{ textAlign: 'center', marginTop: '2rem' }}>
             <button 
               style={styles.secondaryButton}
-              onClick={() => setView('home')}
+              onClick={() => setView('stats')}
             >
-              ← Back to Home
+              View Stats 📊
             </button>
           </div>
         </div>
@@ -216,129 +365,273 @@ function App() {
     );
   }
 
-  // Puzzle screen
-  if (view === 'puzzle') {
-    if (loading && puzzles.length === 0) {
-      return (
-        <div style={styles.container}>
-          <div style={styles.card}>
-            <p style={{ textAlign: 'center' }}>Loading puzzles... 🧠</p>
+  if (view === 'stats') {
+    return (
+      <div style={styles.container}>
+        <div style={styles.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <h2>Your Stats 📊</h2>
+            <button 
+              style={styles.secondaryButton}
+              onClick={() => setView('home')}
+            >
+              ← Back
+            </button>
           </div>
-        </div>
-      );
-    }
 
-    if (puzzles.length === 0) {
-      return (
-        <div style={styles.container}>
-          <div style={styles.card}>
-            <p style={{ textAlign: 'center' }}>No puzzles found 😞</p>
-            <div style={{ textAlign: 'center' }}>
-              <button 
-                style={styles.secondaryButton}
-                onClick={() => setView('categories')}
-              >
-                ← Back to Categories
-              </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+            <div style={{ 
+              background: 'rgba(255, 193, 7, 0.1)', 
+              padding: '1.5rem', 
+              borderRadius: '8px',
+              border: '1px solid rgba(255, 193, 7, 0.3)'
+            }}>
+              <div style={{ fontSize: '2.5rem', fontWeight: 'bold', textAlign: 'center' }}>
+                🔥 {stats.currentStreak}
+              </div>
+              <div style={{ textAlign: 'center', fontSize: '1.1rem', marginTop: '0.5rem' }}>
+                Current Streak (days)
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div style={{ 
+                background: 'rgba(255,255,255,0.05)', 
+                padding: '1.5rem', 
+                borderRadius: '8px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{stats.totalPuzzlesSolved}</div>
+                <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Total Solved</div>
+              </div>
+              
+              <div style={{ 
+                background: 'rgba(255,255,255,0.05)', 
+                padding: '1.5rem', 
+                borderRadius: '8px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{stats.longestStreak}</div>
+                <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Best Streak</div>
+              </div>
+            </div>
+
+            <div style={{ 
+              background: 'rgba(76, 175, 80, 0.1)', 
+              padding: '1rem', 
+              borderRadius: '8px',
+              textAlign: 'center',
+              border: '1px solid rgba(76, 175, 80, 0.3)'
+            }}>
+              <div style={{ fontSize: '1.1rem' }}>
+                {stats.currentStreak === 0 
+                  ? "Start your brain training journey today! 🚀"
+                  : stats.currentStreak < 7 
+                    ? "Great start! Keep building that streak! 💪"
+                    : stats.currentStreak < 30
+                      ? "Amazing dedication! You're on fire! 🔥"
+                      : "Incredible! You're a brain training champion! 🏆"
+                }
+              </div>
             </div>
           </div>
-        </div>
-      );
-    }
 
+          <div style={{ textAlign: 'center', marginTop: '2rem' }}>
+            <button 
+              style={styles.button}
+              onClick={() => setView('categories')}
+            >
+              Continue Training 🎯
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'categories') {
+    return (
+      <div style={styles.container}>
+        <div style={styles.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <h2>Choose Category 🎯</h2>
+            <button 
+              style={styles.secondaryButton}
+              onClick={() => setView('home')}
+            >
+              ← Home
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gap: '1.5rem' }}>
+            {categories.map(category => (
+              <button
+                key={category.id}
+                style={{
+                  ...styles.button,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '1.5rem',
+                  width: '100%',
+                  margin: 0
+                }}
+                onClick={() => startCategory(category.id)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <span style={{ fontSize: '2rem' }}>{category.emoji}</span>
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{category.name}</div>
+                    <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Level 1 - Beginner</div>
+                  </div>
+                </div>
+                <span style={{ fontSize: '1.5rem' }}>→</span>
+              </button>
+            ))}
+          </div>
+
+          <div style={{ textAlign: 'center', marginTop: '2rem', color: 'rgba(255,255,255,0.7)' }}>
+            More categories and levels coming soon! 🚀
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'puzzle' && puzzles.length > 0) {
     const currentPuzzle = puzzles[currentPuzzleIndex];
-    const categoryData = categories.find(c => c.id === selectedCategory);
     
     return (
       <div style={styles.container}>
         <div style={styles.card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
             <div>
-              <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                {categoryData?.emoji} {categoryData?.name} - Level {selectedLevel}
-              </h2>
-              <p style={{ margin: '0.5rem 0 0 0', opacity: 0.7, fontSize: '0.9rem' }}>
+              <h3 style={{ margin: 0, color: 'rgba(255,255,255,0.8)' }}>
+                {categories.find(c => c.id === selectedCategory)?.emoji} {categories.find(c => c.id === selectedCategory)?.name} - Level {selectedLevel}
+              </h3>
+              <div style={{ fontSize: '0.9rem', opacity: 0.6 }}>
                 Puzzle {currentPuzzleIndex + 1} of {puzzles.length}
-              </p>
+              </div>
             </div>
             <button 
               style={styles.secondaryButton}
               onClick={() => setView('categories')}
             >
-              Exit
+              ← Back
             </button>
           </div>
-          
+
+          <div style={{ 
+            background: 'rgba(255,255,255,0.1)', 
+            borderRadius: '10px', 
+            height: '8px',
+            marginBottom: '2rem'
+          }}>
+            <div style={{
+              background: 'linear-gradient(45deg, #4f46e5, #7c3aed)',
+              borderRadius: '10px',
+              height: '100%',
+              width: `${((currentPuzzleIndex + 1) / puzzles.length) * 100}%`,
+              transition: 'width 0.3s ease'
+            }} />
+          </div>
+
           <div style={{ 
             background: 'rgba(255,255,255,0.05)', 
-            padding: '1.5rem', 
+            padding: '2rem', 
             borderRadius: '8px',
             marginBottom: '2rem'
           }}>
-            <h3 style={{ marginTop: 0 }}>{currentPuzzle.title}</h3>
-            <p style={{ fontSize: '1.1rem', lineHeight: '1.6', marginBottom: 0 }}>
-              {currentPuzzle.prompt}
-            </p>
+            <h2 style={{ marginBottom: '1rem' }}>{currentPuzzle.title}</h2>
+            <p style={{ fontSize: '1.1rem', lineHeight: '1.5' }}>{currentPuzzle.prompt}</p>
           </div>
-          
-          {!result?.correct && (
-            <>
-              <input
-                style={styles.input}
-                type="text"
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Enter your answer..."
-                onKeyPress={(e) => e.key === 'Enter' && !loading && answer.trim() && submitAnswer()}
-                disabled={loading}
-              />
-              
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <button 
-                  style={styles.button}
-                  onClick={submitAnswer}
-                  disabled={loading || !answer.trim()}
-                >
-                  {loading ? '🤔 Checking...' : 'Submit Answer'}
-                </button>
-                <button 
-                  style={{...styles.secondaryButton, background: 'rgba(255,193,7,0.2)'}}
-                  onClick={getHint}
-                  disabled={loading}
-                >
-                  💡 Hint
-                </button>
-              </div>
-            </>
-          )}
-          
-          {result && (
-            <div style={{
-              marginTop: '1rem',
-              padding: '1rem',
-              borderRadius: '8px',
-              background: result.correct ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
-              border: `1px solid ${result.correct ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)'}`
-            }}>
-              <p style={{ margin: 0, fontWeight: '500' }}>
+
+          <div style={{ marginBottom: '2rem' }}>
+            <input
+              style={{
+                ...styles.input,
+                fontSize: '1.1rem',
+                padding: '1rem',
+                marginBottom: '1rem'
+              }}
+              type="text"
+              placeholder="Enter your answer..."
+              value={answer}
+              onChange={(e) => setAnswer(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && !loading && submitAnswer()}
+            />
+            
+            {result && (
+              <div style={{
+                padding: '1rem',
+                borderRadius: '8px',
+                background: result.correct ? 'rgba(76, 175, 80, 0.2)' : 'rgba(244, 67, 54, 0.2)',
+                border: `1px solid ${result.correct ? 'rgba(76, 175, 80, 0.5)' : 'rgba(244, 67, 54, 0.5)'}`,
+                marginBottom: '1rem'
+              }}>
                 {result.message}
-              </p>
-              {result.correct && currentPuzzleIndex < puzzles.length - 1 && (
-                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', opacity: 0.8 }}>
-                  Moving to next puzzle...
-                </p>
-              )}
-              {result.correct && currentPuzzleIndex === puzzles.length - 1 && (
-                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', opacity: 0.8 }}>
-                  🎉 Level completed!
-                </p>
-              )}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+            <button 
+              style={styles.button}
+              onClick={submitAnswer}
+              disabled={loading || !answer.trim()}
+            >
+              {loading ? '⏳ Checking...' : 'Submit Answer ✓'}
+            </button>
+            
+            <button 
+              style={styles.secondaryButton}
+              onClick={getHint}
+            >
+              Get Hint 💡
+            </button>
+
+            {result && !result.correct && (
+              <button 
+                style={styles.secondaryButton}
+                onClick={() => {
+                  setAnswer('');
+                  setResult(null);
+                }}
+              >
+                Try Again 🔄
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
   }
+
+  // Loading or error fallback
+  return (
+    <div style={styles.container}>
+      <div style={styles.card}>
+        <div style={{ textAlign: 'center' }}>
+          {loading ? (
+            <>
+              <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>⏳</div>
+              <div>Loading...</div>
+            </>
+          ) : (
+            <>
+              <h2>Something went wrong 😕</h2>
+              <button 
+                style={styles.button}
+                onClick={() => setView('home')}
+              >
+                Go Home
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default App;
