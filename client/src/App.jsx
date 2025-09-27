@@ -7,18 +7,32 @@ const api = axios.create({
 
 function App() {
   const [view, setView] = useState('home');
+  const [selectedCategory, setSelectedCategory] = useState('logic');
+  const [selectedLevel, setSelectedLevel] = useState(1);
   const [puzzles, setPuzzles] = useState([]);
-  const [currentPuzzle, setCurrentPuzzle] = useState(0);
+  const [currentPuzzleIndex, setCurrentPuzzleIndex] = useState(0);
   const [answer, setAnswer] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const fetchPuzzles = async () => {
+  const categories = [
+    { id: 'logic', name: 'Logic', emoji: '🧩' },
+    { id: 'math', name: 'Math', emoji: '🔢' }
+  ];
+
+  const fetchPuzzles = async (category, level) => {
     try {
-      const response = await api.get('/puzzles?category=logic&level=1');
+      setLoading(true);
+      const response = await api.get(`/puzzles?category=${category}&level=${level}`);
       setPuzzles(response.data.puzzles);
+      setCurrentPuzzleIndex(0);
+      setAnswer('');
+      setResult(null);
     } catch (error) {
       console.error('Failed to fetch puzzles:', error);
+      setPuzzles([]);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -27,10 +41,18 @@ function App() {
     
     setLoading(true);
     try {
-      const response = await api.post(`/puzzles/${puzzles[currentPuzzle]._id}/validate`, {
+      const currentPuzzle = puzzles[currentPuzzleIndex];
+      const response = await api.post(`/puzzles/${currentPuzzle._id}/validate`, {
         answer: answer.trim()
       });
       setResult(response.data);
+      
+      // If correct, advance after 2 seconds
+      if (response.data.correct) {
+        setTimeout(() => {
+          nextPuzzle();
+        }, 2000);
+      }
     } catch (error) {
       setResult({ correct: false, message: 'Error validating answer' });
     } finally {
@@ -38,20 +60,35 @@ function App() {
     }
   };
 
+  const nextPuzzle = () => {
+    if (currentPuzzleIndex < puzzles.length - 1) {
+      // Go to next puzzle
+      setCurrentPuzzleIndex(currentPuzzleIndex + 1);
+      setAnswer('');
+      setResult(null);
+    } else {
+      // Completed all puzzles in this level
+      alert('🎉 Level completed! Great job!');
+      setView('categories');
+    }
+  };
+
   const getHint = async () => {
     try {
-      const response = await api.post(`/puzzles/${puzzles[currentPuzzle]._id}/hint`);
+      const currentPuzzle = puzzles[currentPuzzleIndex];
+      const response = await api.post(`/puzzles/${currentPuzzle._id}/hint`);
       alert('💡 ' + response.data.hint);
     } catch (error) {
       alert('Unable to get hint right now');
     }
   };
 
-  useEffect(() => {
-    if (view === 'puzzle') {
-      fetchPuzzles();
-    }
-  }, [view]);
+  const startCategory = (category) => {
+    setSelectedCategory(category);
+    setSelectedLevel(1);
+    fetchPuzzles(category, 1);
+    setView('puzzle');
+  };
 
   const styles = {
     container: {
@@ -83,6 +120,16 @@ function App() {
       margin: '0.5rem',
       transition: 'transform 0.2s'
     },
+    secondaryButton: {
+      padding: '0.75rem 1.5rem',
+      border: '1px solid rgba(255,255,255,0.3)',
+      borderRadius: '8px',
+      background: 'rgba(255,255,255,0.1)',
+      color: 'white',
+      fontSize: '1rem',
+      cursor: 'pointer',
+      margin: '0.5rem'
+    },
     input: {
       width: '100%',
       padding: '0.75rem',
@@ -95,6 +142,7 @@ function App() {
     }
   };
 
+  // Home screen
   if (view === 'home') {
     return (
       <div style={styles.container}>
@@ -103,12 +151,12 @@ function App() {
             🧠 BrainKick
           </h1>
           <p style={{ textAlign: 'center', marginBottom: '2rem', opacity: 0.8 }}>
-            Challenge your mind with AI-powered brain teasers!
+            Challenge your mind with brain teasers across different categories!
           </p>
           <div style={{ textAlign: 'center' }}>
             <button 
               style={styles.button}
-              onClick={() => setView('puzzle')}
+              onClick={() => setView('categories')}
             >
               Start Playing 🎯
             </button>
@@ -118,51 +166,151 @@ function App() {
     );
   }
 
-  if (view === 'puzzle' && puzzles.length > 0) {
-    const puzzle = puzzles[currentPuzzle];
+  // Category selection
+  if (view === 'categories') {
+    return (
+      <div style={styles.container}>
+        <div style={styles.card}>
+          <h2 style={{ textAlign: 'center', marginBottom: '2rem' }}>
+            Choose Your Challenge 🎯
+          </h2>
+          
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            {categories.map((category) => (
+              <div 
+                key={category.id}
+                style={{
+                  ...styles.secondaryButton,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '1.5rem',
+                  cursor: 'pointer'
+                }}
+                onClick={() => startCategory(category.id)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <span style={{ fontSize: '2rem' }}>{category.emoji}</span>
+                  <div>
+                    <h3 style={{ margin: 0 }}>{category.name}</h3>
+                    <p style={{ margin: 0, opacity: 0.7, fontSize: '0.9rem' }}>
+                      3 puzzles per level
+                    </p>
+                  </div>
+                </div>
+                <span style={{ opacity: 0.7 }}>→</span>
+              </div>
+            ))}
+          </div>
+          
+          <div style={{ textAlign: 'center', marginTop: '2rem' }}>
+            <button 
+              style={styles.secondaryButton}
+              onClick={() => setView('home')}
+            >
+              ← Back to Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Puzzle screen
+  if (view === 'puzzle') {
+    if (loading && puzzles.length === 0) {
+      return (
+        <div style={styles.container}>
+          <div style={styles.card}>
+            <p style={{ textAlign: 'center' }}>Loading puzzles... 🧠</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (puzzles.length === 0) {
+      return (
+        <div style={styles.container}>
+          <div style={styles.card}>
+            <p style={{ textAlign: 'center' }}>No puzzles found 😞</p>
+            <div style={{ textAlign: 'center' }}>
+              <button 
+                style={styles.secondaryButton}
+                onClick={() => setView('categories')}
+              >
+                ← Back to Categories
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const currentPuzzle = puzzles[currentPuzzleIndex];
+    const categoryData = categories.find(c => c.id === selectedCategory);
     
     return (
       <div style={styles.container}>
         <div style={styles.card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-            <h2>Logic - Level 1</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div>
+              <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {categoryData?.emoji} {categoryData?.name} - Level {selectedLevel}
+              </h2>
+              <p style={{ margin: '0.5rem 0 0 0', opacity: 0.7, fontSize: '0.9rem' }}>
+                Puzzle {currentPuzzleIndex + 1} of {puzzles.length}
+              </p>
+            </div>
             <button 
-              style={{...styles.button, background: 'rgba(255,255,255,0.2)'}}
-              onClick={() => setView('home')}
+              style={styles.secondaryButton}
+              onClick={() => setView('categories')}
             >
-              Back
+              Exit
             </button>
           </div>
           
-          <h3>{puzzle.title}</h3>
-          <p style={{ fontSize: '1.1rem', lineHeight: '1.6', marginBottom: '1.5rem' }}>
-            {puzzle.prompt}
-          </p>
-          
-          <input
-            style={styles.input}
-            type="text"
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            placeholder="Enter your answer..."
-            onKeyPress={(e) => e.key === 'Enter' && submitAnswer()}
-          />
-          
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button 
-              style={styles.button}
-              onClick={submitAnswer}
-              disabled={loading || !answer.trim()}
-            >
-              {loading ? '🤔 Checking...' : 'Submit Answer'}
-            </button>
-            <button 
-              style={{...styles.button, background: 'rgba(255,193,7,0.8)'}}
-              onClick={getHint}
-            >
-              💡 Hint
-            </button>
+          <div style={{ 
+            background: 'rgba(255,255,255,0.05)', 
+            padding: '1.5rem', 
+            borderRadius: '8px',
+            marginBottom: '2rem'
+          }}>
+            <h3 style={{ marginTop: 0 }}>{currentPuzzle.title}</h3>
+            <p style={{ fontSize: '1.1rem', lineHeight: '1.6', marginBottom: 0 }}>
+              {currentPuzzle.prompt}
+            </p>
           </div>
+          
+          {!result?.correct && (
+            <>
+              <input
+                style={styles.input}
+                type="text"
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+                placeholder="Enter your answer..."
+                onKeyPress={(e) => e.key === 'Enter' && !loading && answer.trim() && submitAnswer()}
+                disabled={loading}
+              />
+              
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button 
+                  style={styles.button}
+                  onClick={submitAnswer}
+                  disabled={loading || !answer.trim()}
+                >
+                  {loading ? '🤔 Checking...' : 'Submit Answer'}
+                </button>
+                <button 
+                  style={{...styles.secondaryButton, background: 'rgba(255,193,7,0.2)'}}
+                  onClick={getHint}
+                  disabled={loading}
+                >
+                  💡 Hint
+                </button>
+              </div>
+            </>
+          )}
           
           {result && (
             <div style={{
@@ -175,20 +323,22 @@ function App() {
               <p style={{ margin: 0, fontWeight: '500' }}>
                 {result.message}
               </p>
+              {result.correct && currentPuzzleIndex < puzzles.length - 1 && (
+                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', opacity: 0.8 }}>
+                  Moving to next puzzle...
+                </p>
+              )}
+              {result.correct && currentPuzzleIndex === puzzles.length - 1 && (
+                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', opacity: 0.8 }}>
+                  🎉 Level completed!
+                </p>
+              )}
             </div>
           )}
         </div>
       </div>
     );
   }
-
-  return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <p>Loading puzzles... 🧠</p>
-      </div>
-    </div>
-  );
 }
 
 export default App;
