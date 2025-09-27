@@ -25,6 +25,8 @@ function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({ currentStreak: 0, totalPuzzlesSolved: 0, longestStreak: 0 });
+  const [skipped, setSkipped] = useState(false);
+  const [skipResult, setSkipResult] = useState(null);
 
   // Auth form state
   const [isLogin, setIsLogin] = useState(true);
@@ -46,9 +48,11 @@ function App() {
   }, []);
 
   const categories = [
-    { id: 'logic', name: 'Logic', emoji: '🧩' },
-    { id: 'math', name: 'Math', emoji: '🔢' }
-  ];
+  { id: 'math', name: 'Math', emoji: '🔢', description: 'Arithmetic, algebra, and problem solving' },
+  { id: 'logic', name: 'Logic', emoji: '🧩', description: 'Reasoning, deduction, and critical thinking' },
+  { id: 'riddles', name: 'Riddles', emoji: '🤔', description: 'Word puzzles, brain teasers, and mysteries' },
+  { id: 'patterns', name: 'Patterns', emoji: '🔍', description: 'Sequences, shapes, and recognition' }
+];
 
   const fetchStats = async () => {
     try {
@@ -101,6 +105,8 @@ function App() {
       setCurrentPuzzleIndex(0);
       setAnswer('');
       setResult(null);
+      setSkipped(false);
+      setSkipResult(null);
     } catch (error) {
       console.error('Failed to fetch puzzles:', error);
       setPuzzles([]);
@@ -134,15 +140,17 @@ function App() {
   };
 
   const nextPuzzle = () => {
-    if (currentPuzzleIndex < puzzles.length - 1) {
-      setCurrentPuzzleIndex(currentPuzzleIndex + 1);
-      setAnswer('');
-      setResult(null);
-    } else {
-      alert('🎉 Level completed! Great job!');
-      setView('categories');
-    }
-  };
+  if (currentPuzzleIndex < puzzles.length - 1) {
+    setCurrentPuzzleIndex(currentPuzzleIndex + 1);
+    setAnswer('');
+    setResult(null);
+    setSkipped(false);      // ADD THIS LINE
+    setSkipResult(null);    // ADD THIS LINE
+  } else {
+    alert('🎉 Level completed! Great job!');
+    setView('categories');
+  }
+};
 
   const getHint = async () => {
     try {
@@ -160,6 +168,22 @@ function App() {
     fetchPuzzles(category, 1);
     setView('puzzle');
   };
+
+  const skipPuzzle = async () => {
+  try {
+    const currentPuzzle = puzzles[currentPuzzleIndex];
+    const response = await api.post(`/puzzles/${currentPuzzle._id}/skip`);
+    setSkipResult(response.data);
+    setSkipped(true);
+    
+    setTimeout(() => {
+      nextPuzzle();
+    }, 4000); // Show answer for 4 seconds
+  } catch (error) {
+    console.error('Skip error:', error);
+    alert('Unable to skip puzzle right now');
+  }
+};
 
   const styles = {
     container: {
@@ -450,53 +474,73 @@ function App() {
   }
 
   if (view === 'categories') {
-    return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-            <h2>Choose Category 🎯</h2>
-            <button 
-              style={styles.secondaryButton}
-              onClick={() => setView('home')}
-            >
-              ← Home
-            </button>
-          </div>
+  return (
+    <div style={styles.container}>
+      <div style={styles.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+          <h2>Choose Category 🎯</h2>
+          <button 
+            style={styles.secondaryButton}
+            onClick={() => setView('home')}
+          >
+            ← Home
+          </button>
+        </div>
 
-          <div style={{ display: 'grid', gap: '1.5rem' }}>
-            {categories.map(category => (
-              <button
-                key={category.id}
-                style={{
-                  ...styles.button,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '1.5rem',
-                  width: '100%',
-                  margin: 0
-                }}
-                onClick={() => startCategory(category.id)}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <span style={{ fontSize: '2rem' }}>{category.emoji}</span>
-                  <div style={{ textAlign: 'left' }}>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{category.name}</div>
-                    <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Level 1 - Beginner</div>
-                  </div>
+        <div style={{ display: 'grid', gap: '1.5rem' }}>
+          {categories.map(category => (
+            <div key={category.id} style={{
+              background: 'rgba(255,255,255,0.05)',
+              borderRadius: '12px',
+              padding: '1.5rem',
+              border: '1px solid rgba(255,255,255,0.1)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <span style={{ fontSize: '2rem' }}>{category.emoji}</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.3rem' }}>{category.name}</h3>
+                  <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', opacity: 0.7 }}>
+                    {category.description}
+                  </p>
                 </div>
-                <span style={{ fontSize: '1.5rem' }}>→</span>
-              </button>
-            ))}
-          </div>
+              </div>
+              
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {[1, 2, 3].map(level => (
+                  <button
+                    key={level}
+                    style={{
+                      ...styles.secondaryButton,
+                      margin: '0.25rem',
+                      padding: '0.5rem 1rem',
+                      fontSize: '0.9rem',
+                      background: 'linear-gradient(45deg, #4f46e5, #7c3aed)'
+                    }}
+                    onClick={() => {
+                      setSelectedCategory(category.id);
+                      setSelectedLevel(level);
+                      fetchPuzzles(category.id, level);
+                      setView('puzzle');
+                    }}
+                  >
+                    Level {level}
+                    <span style={{ fontSize: '0.8rem', opacity: 0.8, marginLeft: '0.5rem' }}>
+                      ({level === 1 ? 'Easy' : level === 2 ? 'Medium' : 'Hard'})
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
 
-          <div style={{ textAlign: 'center', marginTop: '2rem', color: 'rgba(255,255,255,0.7)' }}>
-            More categories and levels coming soon! 🚀
-          </div>
+        <div style={{ textAlign: 'center', marginTop: '2rem', color: 'rgba(255,255,255,0.7)' }}>
+          Each level contains 5 challenging puzzles! 🚀
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
   if (view === 'puzzle' && puzzles.length > 0) {
     const currentPuzzle = puzzles[currentPuzzleIndex];
@@ -572,13 +616,33 @@ function App() {
                 {result.message}
               </div>
             )}
+
+          {skipped && skipResult && (
+            <div style={{
+              padding: '1.5rem',
+              borderRadius: '8px',
+              background: 'rgba(255, 193, 7, 0.2)',
+              border: '1px solid rgba(255, 193, 7, 0.5)',
+              marginBottom: '1rem'
+            }}>
+              <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                Answer: {skipResult.answer}
+              </div>
+              <div style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>
+                {skipResult.explanation}
+              </div>
+              <div style={{ fontSize: '0.8rem', opacity: 0.8, marginTop: '0.5rem' }}>
+                Moving to next puzzle...
+              </div>
+            </div>
+          )}
           </div>
 
-          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
             <button 
               style={styles.button}
               onClick={submitAnswer}
-              disabled={loading || !answer.trim()}
+              disabled={loading || !answer.trim() || skipped}
             >
               {loading ? '⏳ Checking...' : 'Submit Answer ✓'}
             </button>
@@ -586,11 +650,25 @@ function App() {
             <button 
               style={styles.secondaryButton}
               onClick={getHint}
+              disabled={skipped}
             >
               Get Hint 💡
             </button>
 
-            {result && !result.correct && (
+            {!result && !skipped && (
+              <button 
+                style={{
+                  ...styles.secondaryButton,
+                  background: 'rgba(244, 67, 54, 0.2)',
+                  border: '1px solid rgba(244, 67, 54, 0.5)'
+                }}
+                onClick={skipPuzzle}
+              >
+                Skip & See Answer ⏭️
+              </button>
+            )}
+
+            {result && !result.correct && !skipped && (
               <button 
                 style={styles.secondaryButton}
                 onClick={() => {
