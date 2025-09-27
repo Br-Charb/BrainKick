@@ -56,6 +56,7 @@ const levelProgressSchema = new mongoose.Schema({
   completed: { type: Boolean, default: false },
   puzzlesSolved: { type: Number, default: 0 },
   totalPuzzles: { type: Number, default: 5 }, // 5 puzzles per level
+  solvedPuzzleIds: [{ type: String }], // Track which specific puzzles were solved
   completedAt: { type: Date },
   createdAt: { type: Date, default: Date.now }
 });
@@ -96,15 +97,6 @@ const authenticateToken = async (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    // If MongoDB isn't available (development/local), allow a guest/dev user so
-    // the client can fetch puzzles and validate answers without a JWT.
-    // This keeps the production behavior (require token when DB is present).
-    if (mongoose.connection.readyState !== 1) {
-      // Use a simple guest id for in-memory flows
-  req.userId = '0';
-      return next();
-    }
-
     return res.status(401).json({ error: 'Access token required' });
   }
 
@@ -126,10 +118,12 @@ const updateStreak = async (userId, puzzleId) => {
     
     if (mongoose.connection.readyState === 1) {
       // MongoDB is available
-      let streak = await Streak.findOne({ userId });
+      // Convert string ID to ObjectId if needed
+      const mongoUserId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+      let streak = await Streak.findOne({ userId: mongoUserId });
 
       if (!streak) {
-        streak = new Streak({ userId, totalPuzzlesSolved: 0, solvedPuzzles: [] }); // Ensure it starts at 0
+        streak = new Streak({ userId: mongoUserId, totalPuzzlesSolved: 0, solvedPuzzles: [] }); // Ensure it starts at 0
       }
 
       // If this puzzle was already marked solved, do NOT increment totals or modify streak.
@@ -231,29 +225,27 @@ const updateLevelProgress = async (userId, category, level, puzzleId) => {
   try {
     if (mongoose.connection.readyState === 1) {
       // MongoDB is available
-      let progress = await LevelProgress.findOne({ userId, category, level });
+      // Convert string ID to ObjectId if needed
+      const mongoUserId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+      let progress = await LevelProgress.findOne({ userId: mongoUserId, category, level });
       
       if (!progress) {
         progress = new LevelProgress({
-          userId,
+          userId: mongoUserId,
           category,
           level,
           puzzlesSolved: 0,
           totalPuzzles: 5,
-          completed: false
+          completed: false,
+          solvedPuzzleIds: []
         });
       }
-      // Only increment puzzlesSolved if this particular puzzle hasn't been counted yet for this user.
-      // We'll use the Streak.solvedPuzzles list as the source of truth.
-      let alreadyCounted = false;
-      const streak = await Streak.findOne({ userId });
-      if (streak && Array.isArray(streak.solvedPuzzles) && puzzleId) {
-        alreadyCounted = streak.solvedPuzzles.includes(puzzleId);
-      }
-
-      if (!alreadyCounted) {
-        progress.puzzlesSolved++;
-
+      
+      // Check if this puzzle is already counted
+      if (!progress.solvedPuzzleIds.includes(puzzleId)) {
+        progress.solvedPuzzleIds.push(puzzleId);
+        progress.puzzlesSolved = progress.solvedPuzzleIds.length;
+        
         // Check if level is completed (all 5 puzzles solved)
         if (progress.puzzlesSolved >= progress.totalPuzzles && !progress.completed) {
           progress.completed = true;
@@ -274,24 +266,25 @@ const updateLevelProgress = async (userId, category, level, puzzleId) => {
       
       if (!progress) {
         progress = {
-          userId,
+          userId: String(userId),
           category,
           level,
           puzzlesSolved: 0,
           totalPuzzles: 5,
           completed: false,
-          completedAt: null
+          solvedPuzzleIds: [],
+          completedAt: null,
+          createdAt: new Date()
         };
         memoryLevelProgress.push(progress);
       }
       
-      // Only count if not already in user's solved list
-  const streak = memoryStreaks.find(s => String(s.userId) === String(userId));
-  const alreadyCounted = streak && Array.isArray(streak.solvedPuzzles) && puzzleId && streak.solvedPuzzles.includes(puzzleId);
+      // Check if this puzzle is already counted
+      if (!progress.solvedPuzzleIds.includes(puzzleId)) {
+        progress.solvedPuzzleIds.push(puzzleId);
+        progress.puzzlesSolved = progress.solvedPuzzleIds.length;
 
-      if (!alreadyCounted) {
-        progress.puzzlesSolved++;
-
+        // Check if level is completed
         if (progress.puzzlesSolved >= progress.totalPuzzles && !progress.completed) {
           progress.completed = true;
           progress.completedAt = new Date();
@@ -1076,6 +1069,7 @@ app.post('/api/auth/register', async (req, res) => {
         lastActivityDate: null,
         totalPuzzlesSolved: 0,
         solvedPuzzles: [],
+        solvedHistory: [],
         solvedHistory: []
       });
 
@@ -1107,7 +1101,8 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
-      const token = jwt.sign({ userId: String(user._id) }, JWT_SECRET, { expiresIn: '7d' });
+      // Convert ObjectId to string for JWT
+      const token = jwt.sign({ userId: user._id.toString() }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
         message: 'Welcome back! 🎯',
         token,
@@ -1255,12 +1250,38 @@ app.post('/api/puzzles/:id/validate', authenticateToken, async (req, res) => {
     
     console.log(`✅ Answer "${answer}" for puzzle "${puzzle.title}" is ${correct ? 'correct' : 'wrong'}`);
     
-    // Update level progress and streak if correct (update progress first, then mark puzzle solved)
+    // Update progress if correct answer
     if (correct) {
-      // First try to increment level progress (checks whether this puzzle was already counted)
-      await updateLevelProgress(userId, puzzle.category, puzzle.level, puzzleId);
-      // Then update streak and mark puzzle solved
-      await updateStreak(userId, puzzleId);
+      try {
+        // Update both streak and level progress
+        await Promise.all([
+          updateStreak(userId, puzzleId),
+          updateLevelProgress(userId, puzzle.category, puzzle.level, puzzleId)
+        ]);
+        
+        // Get the updated progress info
+        let updatedProgress;
+        if (mongoose.connection.readyState === 1) {
+          updatedProgress = await LevelProgress.findOne({
+            userId: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId,
+            category: puzzle.category,
+            level: puzzle.level
+          });
+        } else {
+          updatedProgress = memoryLevelProgress.find(p => 
+            String(p.userId) === String(userId) && 
+            p.category === puzzle.category && 
+            p.level === puzzle.level
+          );
+        }
+        
+        console.log(`✅ Progress updated for puzzle ${puzzleId}:`, {
+          puzzlesSolved: updatedProgress?.puzzlesSolved || 0,
+          totalPuzzles: updatedProgress?.totalPuzzles || 5
+        });
+      } catch (error) {
+        console.error('Error updating progress:', error);
+      }
     }
     
     const responseMessage = correct 
@@ -1401,7 +1422,9 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
     const userId = req.userId;
     
     if (mongoose.connection.readyState === 1) {
-      const streak = await Streak.findOne({ userId }) || { 
+      // Convert string ID to ObjectId if needed
+      const mongoUserId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+      const streak = await Streak.findOne({ userId: mongoUserId }) || { 
         currentStreak: 0, 
         longestStreak: 0,
         totalPuzzlesSolved: 0,
@@ -1462,14 +1485,79 @@ app.get('/api/stats', authenticateToken, async (req, res) => {
 app.get('/api/progress', authenticateToken, async (req, res) => {
   try {
     const userId = req.userId;
+    const categories = ['math', 'logic', 'riddles', 'patterns'];
+    const levels = [1, 2, 3];
     
     if (mongoose.connection.readyState === 1) {
       // MongoDB is available
-      const progress = await LevelProgress.find({ userId });
-      res.json({ progress });
+      // Convert string ID to ObjectId if needed
+      const mongoUserId = mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : userId;
+      
+      // Get all progress records for this user
+      const progress = await LevelProgress.find({ userId: mongoUserId });
+      
+      const missingProgress = [];
+      categories.forEach(category => {
+        levels.forEach(level => {
+          if (!progress.some(p => p.category === category && p.level === level)) {
+            missingProgress.push({
+              userId: mongoUserId,
+              category,
+              level,
+              puzzlesSolved: 0,
+              totalPuzzles: 5,
+              completed: false,
+              solvedPuzzleIds: []
+            });
+          }
+        });
+      });
+      
+      // Create any missing progress records
+      if (missingProgress.length > 0) {
+        await LevelProgress.insertMany(missingProgress);
+        const allProgress = await LevelProgress.find({ userId: mongoUserId });
+        console.log(`Created ${missingProgress.length} missing progress records for user ${userId}`);
+        res.json({ progress: allProgress });
+      } else {
+        console.log(`Found ${progress.length} progress records for user ${userId}`);
+        res.json({ progress });
+      }
     } else {
-      // Memory storage
-  const progress = memoryLevelProgress.filter(p => String(p.userId) === String(userId));
+      // Memory storage fallback
+      // Filter existing progress records for this user
+      let progress = memoryLevelProgress.filter(p => String(p.userId) === String(userId));
+
+      // Add missing progress records
+      categories.forEach(category => {
+        levels.forEach(level => {
+          if (!progress.some(p => p.category === category && p.level === level)) {
+            progress.push({
+              userId: String(userId),
+              category,
+              level,
+              puzzlesSolved: 0,
+              totalPuzzles: 5,
+              completed: false,
+              solvedPuzzleIds: [],
+              completedAt: null,
+              createdAt: new Date()
+            });
+          }
+        });
+      });
+
+      // Store any newly created progress records in memory
+      progress.forEach(p => {
+        if (!memoryLevelProgress.some(mp => 
+          mp.userId === p.userId && 
+          mp.category === p.category && 
+          mp.level === p.level
+        )) {
+          memoryLevelProgress.push(p);
+        }
+      });
+
       res.json({ progress });
     }
   } catch (error) {

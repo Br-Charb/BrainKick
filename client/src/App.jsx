@@ -105,7 +105,10 @@ function App() {
       localStorage.setItem('brainkick_user', JSON.stringify(userData));
       setUser(userData);
       setView('home');
-      fetchStats();
+  // Clear any client-only solved set and fetch canonical server state for this account
+  setLocalSolved(new Set());
+  fetchStats();
+  fetchLevelProgress();
     } catch (error) {
       setAuthError(error.response?.data?.error || 'Authentication failed');
     } finally {
@@ -119,6 +122,10 @@ function App() {
     setUser(null);
     setView('login');
     setStats({ currentStreak: 0, totalPuzzlesSolved: 0, longestStreak: 0 });
+  // Clear any client-only cached progress so a new account starts fresh
+  setLocalSolved(new Set());
+  setLevelProgress([]);
+  setWeeklyCounts([0,0,0,0,0,0,0]);
   };
 
   const fetchPuzzles = async (category, level) => {
@@ -176,25 +183,10 @@ function App() {
         const currentPuzzle = puzzles[currentPuzzleIndex];
         const puzzleId = currentPuzzle?._id;
 
-        if (puzzleId && !localSolved.has(puzzleId)) {
-          // mark locally solved
-          setLocalSolved(prev => {
-            const s = new Set(prev);
-            s.add(puzzleId);
-            return s;
-          });
-
-          // update levelProgress locally
-          setLevelProgress(prev => {
-            const updated = prev.map(item => {
-              if (item.category === selectedCategory && item.level === selectedLevel) {
-                const puzzlesSolved = Math.min((item.puzzlesSolved || 0) + 1, item.totalPuzzles || 5);
-                return { ...item, puzzlesSolved };
-              }
-              return item;
-            });
-            return updated;
-          });
+        // Always fetch fresh progress from server after a correct answer
+        if (puzzleId) {
+          fetchStats();
+          fetchLevelProgress();
         }
 
         fetchStats();
