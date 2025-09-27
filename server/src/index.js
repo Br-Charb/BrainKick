@@ -12,6 +12,12 @@ const openai = new OpenAI({
 
 console.log('🚀 Starting BrainKick server...');
 
+// JWT secret: prefer environment variable, fall back to a development secret with a clear warning.
+const JWT_SECRET = process.env.JWT_SECRET || (() => {
+  console.warn('⚠️ JWT_SECRET is not set. Using development fallback secret. DO NOT use this in production.');
+  return 'dev-secret-change-me';
+})();
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 
@@ -66,11 +72,20 @@ const authenticateToken = async (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
+    // If MongoDB isn't available (development/local), allow a guest/dev user so
+    // the client can fetch puzzles and validate answers without a JWT.
+    // This keeps the production behavior (require token when DB is present).
+    if (mongoose.connection.readyState !== 1) {
+      // Use a simple guest id for in-memory flows
+      req.userId = 0;
+      return next();
+    }
+
     return res.status(401).json({ error: 'Access token required' });
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     req.userId = decoded.userId;
     next();
   } catch (error) {
@@ -790,7 +805,7 @@ app.post('/api/auth/register', async (req, res) => {
       const streak = new Streak({ userId: user._id, solvedPuzzles: [] });
       await streak.save();
 
-      const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
       res.status(201).json({
         message: 'Welcome to BrainKick! 🧠⚡',
         token,
@@ -814,7 +829,7 @@ app.post('/api/auth/register', async (req, res) => {
       };
       memoryUsers.push(user);
 
-      const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
       res.status(201).json({
         message: 'Welcome to BrainKick! 🧠⚡',
         token,
@@ -842,7 +857,7 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
-      const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
         message: 'Welcome back! 🎯',
         token,
@@ -854,7 +869,7 @@ app.post('/api/auth/login', async (req, res) => {
         return res.status(401).json({ error: 'Invalid email or password' });
       }
 
-      const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
         message: 'Welcome back! 🎯',
         token,
