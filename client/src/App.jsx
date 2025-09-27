@@ -41,7 +41,28 @@ function App() {
   const [showExplanation, setShowExplanation] = useState(false);
   const [hintText, setHintText] = useState('');
   const [showHint, setShowHint] = useState(false);
+  const [sectionTimer, setSectionTimer] = useState(0);
+  const [sectionTimerActive, setSectionTimerActive] = useState(false);
+  const [totalTimeSpent, setTotalTimeSpent] = useState(0);
 
+  // Timer effect
+  useEffect(() => {
+    let interval;
+    if (sectionTimerActive) {
+      interval = setInterval(() => {
+        setSectionTimer(prev => prev + 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [sectionTimerActive]);
+
+  // Format time function
+  const formatTime = (seconds) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${hrs > 0 ? `${hrs}h ` : ''}${mins}m ${secs}s`;
+  };
 
   // Auth form state
   const [isLogin, setIsLogin] = useState(true);
@@ -139,10 +160,12 @@ function App() {
       setSkipped(false);
       setSkipResult(null);
       setShowNext(false);
-  setShowExplanation(false); // ADD THIS LINE
-  // hide any visible hint when loading new puzzles
-  setShowHint(false);
-  setHintText('');
+      setShowExplanation(false);
+      setShowHint(false);
+      setHintText('');
+      // Reset and start section timer
+      setSectionTimer(0);
+      setSectionTimerActive(true);
     } catch (error) {
       console.error('Failed to fetch puzzles:', error);
       setPuzzles([]);
@@ -223,6 +246,9 @@ function App() {
 
         // Refresh progress after the fireworks have started, then navigate back
         setTimeout(() => {
+          // Save section time and cleanup
+          setTotalTimeSpent(prev => prev + sectionTimer);
+          setSectionTimerActive(false);
           fetchLevelProgress(); // Refresh progress before going back
           setView('categories');
         }, 1800);
@@ -410,6 +436,28 @@ function App() {
     }
   };
 
+  // Animation styles
+  const animationStyle = `
+    @keyframes fadeInScale {
+      from {
+        opacity: 0;
+        transform: scale(0.9);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+  `;
+
+  // Add animation styles to document
+  React.useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = animationStyle;
+    document.head.appendChild(style);
+    return () => document.head.removeChild(style);
+  }, []);
+
   // Main render logic
   if (!user) {
     return (
@@ -491,12 +539,18 @@ function App() {
       <div style={styles.container}>
         <div style={styles.card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-            <div>
-              <h2 style={{ margin: 0 }}>Welcome, {user.username}! 🎯</h2>
-              <div style={styles.streakBadge}>
-                🔥 {stats.currentStreak} day streak
-              </div>
+            <div style={styles.streakBadge}>
+              🔥 {stats.currentStreak} day streak
             </div>
+            <h2 style={{ 
+              margin: '0',
+              fontSize: '1.8rem',
+              flexGrow: 1,
+              textAlign: 'center',
+              padding: '0 1rem'
+            }}>
+              Welcome, {user.username}! 🎯
+            </h2>
             <button 
               style={styles.secondaryButton}
               onClick={logout}
@@ -504,10 +558,19 @@ function App() {
               Logout
             </button>
           </div>
-
-          <h1 style={{ textAlign: 'center', marginBottom: '1rem' }}>
-            🧠 BrainKick
-          </h1>
+          <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+            <img 
+              src="/BrainKick Logo No Background.png"
+              alt="BrainKick Logo"
+              style={{ 
+                maxWidth: '420px',
+                width: '100%',
+                height: 'auto',
+                marginBottom: '0.5rem',
+                animation: 'fadeInScale 0.8s ease-out'
+              }}
+            />
+          </div>
           
           <div style={{ 
             background: 'rgba(255,255,255,0.05)', 
@@ -580,7 +643,7 @@ function App() {
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
               <div style={{ 
                 background: 'rgba(255,255,255,0.05)', 
                 padding: '1.5rem', 
@@ -599,6 +662,17 @@ function App() {
               }}>
                 <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{stats.longestStreak}</div>
                 <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Best Streak</div>
+              </div>
+
+              <div style={{ 
+                background: 'rgba(79, 70, 229, 0.1)', 
+                padding: '1.5rem', 
+                borderRadius: '8px',
+                textAlign: 'center',
+                border: '1px solid rgba(79, 70, 229, 0.2)'
+              }}>
+                <div style={{ fontSize: '2rem', fontWeight: 'bold' }}>{formatTime(totalTimeSpent)}</div>
+                <div style={{ fontSize: '0.9rem', opacity: 0.8 }}>Time Training</div>
               </div>
             </div>
 
@@ -848,11 +922,28 @@ function App() {
                 <div style={{ background: 'rgba(255,255,255,0.03)', padding: '0.25rem 0.6rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
                   ✅ Level progress: {currentLevelInfo.puzzlesSolved}/{currentLevelInfo.totalPuzzles}
                 </div>
+                <div style={{ 
+                  background: 'rgba(79, 70, 229, 0.2)', 
+                  padding: '0.25rem 0.6rem', 
+                  borderRadius: '12px', 
+                  border: '1px solid rgba(79, 70, 229, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem'
+                }}>
+                  ⏱️ {formatTime(sectionTimer)}
+                </div>
               </div>
             </div>
             <button 
               style={styles.secondaryButton}
-              onClick={() => { fetchLevelProgress(); setView('categories'); }}
+              onClick={() => { 
+                // Save section time and cleanup
+                setTotalTimeSpent(prev => prev + sectionTimer);
+                setSectionTimerActive(false);
+                fetchLevelProgress(); 
+                setView('categories'); 
+              }}
             >
               ← Back
             </button>
