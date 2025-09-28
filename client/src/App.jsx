@@ -271,6 +271,18 @@ function App() {
       }
     };
 
+  const handleKeyPress = (e) => {
+  if (e.key === 'Enter') {
+    if (showNext && !loading) {
+      // If showing next button, proceed to next puzzle
+      nextPuzzle();
+    } else if (!loading && answer.trim()) {
+      // If not showing next button and have an answer, submit it
+      submitAnswer();
+    }
+  }
+};
+
   const getHint = async () => {
     // Toggle hint visibility. If already visible, hide it.
     if (showHint) {
@@ -1004,7 +1016,7 @@ function App() {
               placeholder="Enter your answer..."
               value={answer}
               onChange={(e) => setAnswer(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && !loading && submitAnswer()}
+              onKeyPress={handleKeyPress}
             />
             
             {result && (
