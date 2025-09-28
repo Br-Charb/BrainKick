@@ -25,7 +25,7 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors({
-  origin: 'https://brainkick.netlify.app',  // <-- your actual frontend URL
+  origin: true,  // <-- your actual frontend URL
   methods: ['GET','POST','PUT','DELETE'],
   allowedHeaders: ['Content-Type','Authorization']
 }));
