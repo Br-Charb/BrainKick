@@ -126,7 +126,7 @@ function App() {
     setAuthError('');
 
     try {
-      const endpoint = isLogin ? '/auth/login' : '/auth/register';
+      const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
       const payload = isLogin 
         ? { email: authForm.email, password: authForm.password }
         : authForm;
