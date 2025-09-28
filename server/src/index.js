@@ -25,10 +25,20 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors({
-  origin: true,  // <-- your actual frontend URL
+  origin: function (origin, callback) {
+    // allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    // allow your Netlify domain
+    if (origin === 'https://68d89dafb20736b4cb21ea14--brainkick.netlify.app') {
+      return callback(null, true);
+    } else {
+      return callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET','POST','PUT','DELETE'],
   allowedHeaders: ['Content-Type','Authorization']
 }));
+
 
 app.use(express.json());
 
