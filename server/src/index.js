@@ -24,20 +24,30 @@ const JWT_SECRET = process.env.JWT_SECRET || (() => {
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+const allowedOrigins = [
+  'https://68d89dafb20736b4cb21ea14--brainkick.netlify.app',
+  'https://brainkick.netlify.app' // in case your main Netlify domain is different
+];
+
 app.use(cors({
   origin: function (origin, callback) {
     // allow requests with no origin (like mobile apps or curl)
     if (!origin) return callback(null, true);
-    // allow your Netlify domain
-    if (origin === 'https://68d89dafb20736b4cb21ea14--brainkick.netlify.app') {
-      return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
     } else {
-      return callback(new Error('Not allowed by CORS'));
+      callback(null, false); // don't throw an error; just reject the origin
     }
   },
-  methods: ['GET','POST','PUT','DELETE'],
-  allowedHeaders: ['Content-Type','Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true // if you ever send cookies or auth headers
 }));
+
+// Make sure to handle OPTIONS requests globally
+app.options('*', cors());
+
 
 
 app.use(express.json());
