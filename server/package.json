@@ -14,5 +14,8 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.6.0",
     "openai": "^4.104.0"
+  },
+  "engines": {
+    "node": "20.x"
   }
 }
