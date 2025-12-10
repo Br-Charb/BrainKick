@@ -284,8 +284,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 👨‍💻 Authors
 
-- **Your Team Name** - Initial work and development
-
+- Bejamin Charbonneau, Ryan Qu, and Joseph Chan
+  
 ## 🙏 Acknowledgments
 
 - OpenAI for intelligent answer validation
